@@ -95,7 +95,11 @@ class MasterFilter(Group):
   def setDataStream(self, bciPath, path, file):
     try:
       mod = importlib.import_module(path + "." + file)
-      return mod.__dict__[file](bciPath, self.__class__.__name__)
+      if file=='UDP':
+        return mod.__dict__[file]('localhost',9999)
+      else:
+        return mod.__dict__[file](bciPath, self.__class__.__name__)
+        
     except:
       #self.logPrint(f"Data thread could not be loaded! Chosen stream: {file}")
       traceback.print_exc()
