@@ -117,7 +117,7 @@ class BCI2000DataThread(AbstractDataThread):
         self.print('Keyboard interrupt, exiting')
         quit()
 
-  def initalize(self, address):
+  def initialize(self, address):
     try:
       # With the help of bind() function 
       # binding host and port

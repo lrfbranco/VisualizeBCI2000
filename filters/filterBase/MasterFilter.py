@@ -70,7 +70,7 @@ class MasterFilter(Group):
     if newAddy != self.address:
       self.address = newAddy
     self.t1.quit()
-    self.comm.acqThr.initalize(self.address)
+    self.comm.acqThr.initialize(self.address)
     print("starting data thread")
     self.t2.start()
   
