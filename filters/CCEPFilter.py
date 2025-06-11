@@ -4,9 +4,11 @@ from PyQt5 import QtWidgets
 from pyqtgraph.Qt import QtCore
 import pyqtgraph as pg
 from pyqtgraph.dockarea import *
+import pyqtgraph.parametertree as ptree
 from filters.filterBase.GridFilter import GridFilter
 from base.SharedVisualization import saveFigure
 from enum import Enum
+from scipy.signal import find_peaks
 
 backgroundColor = (14, 14, 14)
 highlightColor = (60, 60, 40)
@@ -18,6 +20,89 @@ class Column(Enum):
   Sig = 2
   AUC = 3
 
+#taken from pyqtgraph example
+## test add/remove
+## this group includes a menu allowing the user to add new parameters into its child list
+class ScalableGroup(ptree.parameterTypes.GroupParameter):
+    def __init__(self, p, **opts):
+        opts['type'] = 'group'
+        opts['addText'] = "Add"
+        opts['addList'] = ['str', 'float', 'int']
+        ptree.parameterTypes.GroupParameter.__init__(self, **opts)
+        self.p = p
+
+        #enable/disable
+        self.addChild({'name': 'Enable auto-detection', 'type': 'bool', 'value': 0})
+        self.a = self.param('Enable auto-detection')
+        self.a.sigValueChanged.connect(self.aChanged)
+        #reference channel
+        self.addChild({'name': 'Detection channel', 'type': 'str', 'value': "2", 'tip': 'Index or name'})
+        self.b = self.param('Detection channel')
+        self.b.sigValueChanged.connect(self.aChanged)
+    def aChanged(self):
+      self.p.setAutoDetect(self.a.value())
+    def bChanged(self):
+      self.p.setDetectChannels(self.b.value())
+    
+    def addNew(self, typ):
+        val = {
+            'str': '',
+            'float': 0.0,
+            'int': 0
+        }[typ]
+        self.addChild(dict(name="ScalableParam %d" % (len(self.childs)+1), type=typ, value=val, removable=True, renamable=True))
+
+class TestBooleanParams(ptree.parameterTypes.GroupParameter):
+  def __init__(self, p, **opts):
+    self.p = p
+    #opts['type'] = 'bool'
+    #opts['value'] = True
+    ptree.parameterTypes.GroupParameter.__init__(self, **opts)
+    self.addChild({'name': 'Sort channels', 'type': 'bool', 'value': 0})
+    self.a = self.param('Sort channels')
+    self.a.sigValueChanged.connect(self.aChanged)
+
+    self.addChild({'name': 'Average CCEPS', 'type': 'bool', 'value': 0})
+    self.b = self.param('Average CCEPS')
+    self.b.sigValueChanged.connect(self.bChanged)
+
+    self.addChild({'name': 'Threshold (STD)', 'type': 'slider', 'value': 2, 'span': np.linspace(0, 10, 100)})
+    self.c = self.param('Threshold (STD)')
+    #self.c.sigValueChanged.connect(self.cChanged)
+    
+    self.addChild({'name': 'Max Windows', 'type': 'int', 'value': 16, 'limits': [0, 100]})
+    self.d = self.param('Max Windows')
+    self.d.sigValueChanged.connect(self.dChanged)
+            
+    self.addChild({'name': 'Save Figures on Refresh', 'type': 'bool', 'value': 0})
+    self.f = self.param('Save Figures on Refresh')
+    self.f.sigValueChanged.connect(self.fChanged)
+    
+    self.addChild({'name': 'Save Figures', 'type': 'action'})
+    self.g = self.param('Save Figures')
+    self.g.sigActivated.connect(self.gChanged)
+
+    self.addChild({'name': 'Clear Figures', 'type': 'action'})
+    self.h = self.param('Clear Figures')
+    self.h.sigActivated.connect(self.hChanged)
+
+  def aChanged(self):
+    self.p.setSortChs(self.a.value())
+  def bChanged(self):
+    self.p.setAvgPlots(self.b.value())
+  def cChanged(self):
+    self.p.setStdDevState(self.c.value())
+  def dChanged(self):
+    self.p.setMaxWindows(self.d)
+  def eChanged(self):
+    self.p.setMaxPlots(self.e)
+  def fChanged(self):
+    self.p.setSaveFigs(self.f.value())
+  def gChanged(self):
+    self.p.saveFigures()
+  def hChanged(self):
+    self.p.clearFigures()
+
 class CCEPFilter(GridFilter):
   def __init__(self, area, bciPath, stream):
     super().__init__(area, bciPath, stream)
@@ -28,75 +113,25 @@ class CCEPFilter(GridFilter):
     self.pens = [pg.mkPen(x) for x in np.linspace(0, 1, 256)] #create all the pens we could ever need
     self.gridNums = pg.GraphicsLayoutWidget(title="CCEP Aggregate")
     self.table = QtWidgets.QTableWidget()
-    #title dock widgets
-    clearButton = QtWidgets.QPushButton('Clear Figures')
-    clearButton.clicked.connect(self.clearFigures)
-    saveButton = QtWidgets.QPushButton('Save Figures')
-    saveButton.clicked.connect(self.saveFigures)
-    #settings dock widgets
-    #choose std dev threshold
-    self.stdSpin = QtWidgets.QSlider(QtCore.Qt.Horizontal)
-    #self.stdSpin = pg.SpinBox(int=True, compactHeight=True)
-    self.stdSpin.setMaximum(10*10)
-    self.stdSpin.setMinimum(0)
-    self.stdSpin.valueChanged.connect(self.setStdDevState)
-    stdLab = QtWidgets.QLabel("Threshold (STD)", objectName="h3")
-    stdLab.setToolTip("Standard Deviations for threshold, calculated from baseline")
-    #specifies where to start visualizing the signal
-    self.baseSpin = pg.SpinBox(int=True, compactHeight=True)
-    self.baseSpin.sigValueChanged.connect(self.setBaselineBegin)
-    self.baseSpin.setToolTip("First value of x axis")
-    baseLab = QtWidgets.QLabel('x<sub>0</sub>', objectName="h3")
-    baseLab.setToolTip("First value of x axis")
-    #max window number
-    self.maxSpin = pg.SpinBox(int=True, compactHeight=True)
-    self.maxSpin.setMaximum(100)
-    self.maxSpin.setMinimum(0)
-    self.maxSpin.sigValueChanged.connect(self.setMaxWindows)
-    self.maxSpin.setToolTip("Maximum number of windows to show")
-    maxLab = QtWidgets.QLabel("Max Windows", objectName="h3")
-    maxLab.setToolTip("Maximum number of windows to show")
-    #max plots
-    self.holdSpin = pg.SpinBox(int=True, compactHeight=True)
-    self.holdSpin.setMaximum(100)
-    self.holdSpin.setMinimum(0)
-    self.holdSpin.sigValueChanged.connect(self.setMaxPlots)
-    self.holdSpin.setToolTip("Maximum plots to hold (0 to hold all)")
-    holdLab = QtWidgets.QLabel("Hold Plots", objectName="h3")
-    holdLab.setToolTip("Maximum plots to hold (0 to hold all)")
-    #toggle to average every existing plot
-    self.avgBut = QtWidgets.QCheckBox("Average CCEPs")
-    self.avgBut.stateChanged.connect(self.setAvgPlots)
-    self.avgBut.setToolTip("New plot will be average of all CCEPs")
-    #sorting toggle
-    self.sortBut = QtWidgets.QCheckBox("Sort channels")
-    self.sortBut.stateChanged.connect(self.setSortChs)
-    self.sortBut.setToolTip("Sort by number of CCEPs detected")
-    #automatically saving figures toggle
-    self.saveFigBut = QtWidgets.QCheckBox("Save figures on refresh")
-    self.saveFigBut.stateChanged.connect(self.setSaveFigs)
-    self.saveFigBut.setToolTip("Automatically save a .svg of the CCEPs when they are cleared/refreshed")
-
 
     settingsD = Dock("Settings")
     settingsLab = QtWidgets.QLabel("Settings", objectName="h1")
-    settingsLab.setWordWrap(True)
-    figuresLab = QtWidgets.QLabel("Figures", objectName="h1")
-    #settingsD.addWidget(figuresLab, row=0, col=0,)
-    settingsD.addWidget(saveButton, row=1, col=0)
-    settingsD.addWidget(settingsLab, row=3, col=0, colspan=2)
-    settingsD.addWidget(stdLab, row=4, col=0)
-    settingsD.addWidget(self.stdSpin, row=5, col=0)
-    settingsD.addWidget(maxLab, row=6, col=0)
-    settingsD.addWidget(self.maxSpin, row=7, col=0)
-    settingsD.addWidget(baseLab, row=8, col=0)
-    settingsD.addWidget(self.baseSpin, row=9, col=0)
-    settingsD.addWidget(holdLab, row=10, col=0)
-    settingsD.addWidget(self.holdSpin, row=11, col=0)
-    settingsD.addWidget(self.avgBut, row=12, col=0)
-    settingsD.addWidget(self.sortBut, row=13, col=0)
-    settingsD.addWidget(self.saveFigBut, row=14, col=0)
-    settingsD.addWidget(clearButton, row=17, col=0)
+
+    #create parameter tree
+    params = [
+        TestBooleanParams(name= 'General Options', p=self, showTop=False),
+        ScalableGroup(name="Auto Detect Options", p=self, tip='Click to add channels'),
+    ]
+
+    self.p = ptree.Parameter.create(name="Settings", type='group', children=params, title=None)
+    self.t = ptree.ParameterTree()
+    self.t.setParameters(self.p)
+    #self.t.setParameters(params)
+    #self.t.resizeColumnToContents(0)
+    self.t.header().setSectionResizeMode(pg.QtWidgets.QHeaderView.Stretch)
+    #self.t.show()
+    settingsD.addWidget(settingsLab)
+    settingsD.addWidget(self.t)
 
     d2 = Dock("Table", widget=self.table)
     self.area.addDock(settingsD)
@@ -106,41 +141,26 @@ class CCEPFilter(GridFilter):
   def loadSettings(self):
     super().loadSettings()
     self._stds = self.settings.value("stds", 5)
-    self.stdSpin.setValue(self._stds)
-    self.stdSpin.setToolTip(str(self._stds/10))
-
-    self._sortChs = eval(self.settings.value("sortChs", "False").lower().capitalize()) #take care of string
-    self.sortBut.setChecked(self._sortChs)
-
-    self._saveFigs = eval(self.settings.value("saveFigs", "False").lower().capitalize())
-    self.saveFigBut.setChecked(self._saveFigs)
-
-    self._avgPlots = eval(self.settings.value("avgPlots", "False").lower().capitalize())
-    self.avgBut.setChecked(self._avgPlots)
-
-    self._visBegin = self.settings.value("visBegin", 0)
-    self.baseSpin.setValue(self._visBegin)
-
-    self._maxWindows = self.settings.value("maxWindows", 25)
-    self.maxSpin.setValue(self._maxWindows)
-
-    self._maxPlots = self.settings.value("maxPlots", 0)
-    self.holdSpin.setValue(self._maxPlots)
 
     self._maskStart = self.settings.value("maskStart", -5)
     self._maskEnd = self.settings.value("maskEnd", 15)
 
+    pState = self.settings.value("pState", {})
+    # if hasattr(pState, 'children'):
+    #   children = pState['children']
+
+    if pState != {}:
+      self.p.restoreState(pState, addChildren=False, removeChildren=False)
+    self._maxWindows = self.p.child('General Options')['Max Windows']
+    self._sortChs = self.p.child('General Options')['Sort channels']
+    self._trigCh = self.p.child('Auto Detect Options')['Detection channel']
+
   def saveSettings(self):
     super().saveSettings()
-    self.settings.setValue("stds", self._stds)
-    self.settings.setValue("sortChs", bool(self._sortChs))
-    self.settings.setValue("saveFigs", bool(self._saveFigs))
-    self.settings.setValue("avgPlots", bool(self._avgPlots))
+
     self.settings.setValue("maskStart", self._maskStart)
     self.settings.setValue("maskEnd", self._maskEnd)
-    self.settings.setValue("visBegin", self._visBegin)
-    self.settings.setValue("maxWindows", self._maxWindows)
-    self.settings.setValue("maxPlots", self._maxPlots)
+    self.settings.setValue("pState", self.p.saveState())
 
   #an attempt to abstract plotting from BCI2000
   def checkPlot(self):
@@ -164,16 +184,51 @@ class CCEPFilter(GridFilter):
 
       #process data
       aocs = []
-      processedData = np.zeros(np.shape(data))
+      chunk = False
+      peaks = None
+      if self.p.child('Auto Detect Options')['Detection channel']:
+        #trigCh = self.p.child('General Options')['Sort channels']
+        #get channel to use as trigger
+        try:
+          chIndex = int(self._trigCh)
+        except ValueError:
+          try:
+            #not index, gotta be ch name
+            chIndex = self.chNames.index(self._trigCh)
+          except:
+            self.logPrint(self._trigCh + " is not a valid channel name")
+            chIndex = 1
+        self.trigData = data[chIndex - 1] #convert to 0-based
+
+        #get chunks by peaks
+        #hard code parameters just to test
+        peaks, properties = find_peaks(self.trigData, 100, distance=10)
+        print(f"Found {len(peaks)} peaks")
+        if len(peaks) <= 1:
+          chunk = False
+        else:
+          chunk = True
+
+        # #chunk based off artifact
+        # for i, ch in enumerate(self.chTable.values()):
+        #   ch.chunkData(data[i], peaks) #chunks and computes
+        #   aocs.append(ch.auc)
+      
+      #compute and chunk data
+      avgPlots = self.p.child('General Options')['Average CCEPS']
       for i, ch in enumerate(self.chTable.values()):
-        processedData[i] = ch.computeData(data[i]) #compute data
+        if chunk:
+          ch.chunkData(data[i], peaks, avgPlots) #chunks and computes
+        else:
+          ch.computeData(data[i], avgPlots) #compute data
         aocs.append(ch.auc)
       
       #send processed data
       self.dataProcessedSignal.emit(aocs)
 
       #we scale by 10 cause slider can only do ints
-      self.aucThresh = np.std(aocs) * self._stds/10
+      stds = self.p.child('General Options')['Threshold (STD)']
+      self.aucThresh = np.std(aocs) * stds
 
       #plot!
       self._renderPlots()
@@ -189,17 +244,18 @@ class CCEPFilter(GridFilter):
     self.chTable = {}
     self.regs = list(range(self.channels))
     #init variables
-    self.baselineLength = self.getParameterValue("BaselineEpochLength") #for now, assume ms
+    self.baselineLength = self.getParameterValue("BaselineEpochLength")
     self.latStart = 0
     self.latStartSamples = self._maskStart
     self.ccepLength = self.getParameterValue("CCEPEpochLength")
     self.sr = self.getParameterValue("SamplingRate")
-    if self.sr < 30:
-        self.sr = self.sr * 1000 #TODO: ugly hack if sampling rate is in kHz
     self.baseSamples = self.msToSamples(self.baselineLength)
+    self.ccepSamples = self.msToSamples(self.ccepLength)
     self.trigSamples = self._maskEnd 
     self.trigLatLength = self.trigSamples * 1000.0 / self.sr
     
+    #redefine element size
+    self.elements = self.baseSamples + self.ccepSamples
     self.x = np.linspace(-self.baselineLength, self.ccepLength, self.elements)
 
     #to visualize stimulating channels if we can
@@ -277,15 +333,13 @@ class CCEPFilter(GridFilter):
 
   def setStdDevState(self, value):
     self._stds = value
-    self.stdSpin.setToolTip(str(value/10))
+    #self.stdSpin.setToolTip(str(value/10))
   def setMaxWindows(self, spin):
     self._maxWindows = spin.value()
-  def setMaxPlots(self, spin):
-    self._maxPlots = spin.value()
   def setAvgPlots(self, state):
     self._avgPlots = state
   def setSortChs(self, state):
-    if self._sortChs and not state and hasattr(self, 'chTable'):
+    if hasattr(self, 'chTable') and self._sortChs and not state:
       #re-initialize order
       for ch in self.chTable.values():
         ch.totalChanged(False)
@@ -297,19 +351,15 @@ class CCEPFilter(GridFilter):
       self._renderPlots(newData=False)
   def setSaveFigs(self, state):
     self._saveFigs = state
-
-  def setBaselineBegin(self, spin):
-    self._visBegin = spin.value()
-    if hasattr(self, "windows"):
-      #windows have been configured
-      for i in range(0, self.windows):
-        #xEnd = self.chPlot[i].getViewBox().viewRange()[0][1]
-        self.chPlot[i].getViewBox().setXRange(spin.value(), self.ccepLength)
+  def setAutoDetect(self, state):
+    self._autoDetect = state
+    #self.trigChForm.setReadOnly(not state)
+  def setDetectChannels(self, text):
+    print(text)
+    self._trigCh = text
       
   def msToSamples(self, lengthMs):
     return int(lengthMs * self.sr/1000.0)
-      
-
 
   def updateParameter(self, latStart, newLat):
     if newLat != self.trigLatLength:
@@ -322,7 +372,7 @@ class CCEPFilter(GridFilter):
       self._maskStart = self.latStartSamples
   
   def clearFigures(self):
-    if self._saveFigs:
+    if self.p.child('General Options')['Save Figures on Refresh']:
       self.saveFigures()
     for i in range(0, self.windows):
       children = self.chPlot[i].listDataItems()
@@ -335,7 +385,26 @@ class CCEPFilter(GridFilter):
       t.database = []
 
   def saveFigures(self):
-    saveFigure(self.print, self.bciThread.savePath, self.gridPlots, '_CCEPs', '.svg')
+    #beautiful hack
+    #mimic minimal mouse click
+    class Dummy():
+      def __init__(self):
+        acceptedItem = None
+      def screenPos(self):
+        return pg.QtCore.QPointF(0,0)
+
+    if self.gridPlots.getItem(0,0) != None:
+      scene = self.gridPlots.scene()
+      if not hasattr(scene, "contextMenuItem"):
+        vb = self.gridPlots.getItem(0,0).getViewBox()
+        
+        event = Dummy()
+        event.acceptedItem = vb
+        vb.raiseContextMenu(event)
+      scene.showExportDialog()
+
+    return
+    saveFigure(self.gridPlots)
     
   def _renderPlots(self, newData=True):
     #update table with new data
@@ -354,8 +423,7 @@ class CCEPFilter(GridFilter):
       if not self.table.isRowHidden(r):
         chName = self.table.item(r, Column.Name.value).text()
         self.chPlot[i].changePlot(chName, self.chTable[chName])
-        if newData:
-          self.chPlot[i].plotData()
+        self.chPlot[i].plotData(newData)
         i+=1
 
   def _changeBackgroundColor(self, row, emph):
@@ -450,25 +518,22 @@ class CCEPPlot(pg.PlotItem):
     axView.disableAutoRange()
     axView.setMouseEnabled(x=False, y=True)
     axView.setDefaultPadding(0)
-    xLim = self.p._visBegin
+    xLim = -self.p.baselineLength
     yLim = self.p.ccepLength
     axView.setXRange(xLim, yLim, padding=0)
     axView.setYRange(-1000, 1000)
 
     self.setMinimumSize(100,100)
 
-    self.hideAxis('left')
-    self.hideAxis('bottom')
-
     #stim artifact filter
-    self.latReg = pg.LinearRegionItem(values=(self.p.latStartSamples*1000.0/self.p.sr, self.p.trigLatLength), movable=True, brush=(9, 24, 80, 100), 
+    self.latLow = self.p.latStartSamples*1000.0/self.p.sr
+    self.latHigh = self.p.trigLatLength
+    self.latReg = pg.LinearRegionItem(values=(self.latLow, self.latHigh), movable=True, brush=(9, 24, 80, 100), 
                                       pen=pg.mkPen(color=(9, 24, 80), width=1, style=QtCore.Qt.DotLine), bounds=[xLim, yLim])
     self.latReg.setZValue(highZValue) #make sure its in front of all plots
     #callbacks
     self.latReg.sigRegionChanged.connect(self.regionChanged)
     self.addItem(self.latReg)
-    self.latHigh = self.p.trigLatLength
-    self.latLow = 0
 
     #initialize average plot
     self.avg = self.plot(x=self.p.x, y=np.zeros(self.p.elements), pen=pg.mkPen(backgroundColor)) #filler data
@@ -490,7 +555,7 @@ class CCEPPlot(pg.PlotItem):
     if self.latHigh != self.friend.latHigh or self.latLow != self.friend.latLow:
       self.p.updateParameter(self.latLow, self.latHigh) 
       self.friend.latReg.setRegion(reg.getRegion())
-
+  
   def changePlot(self, name, link):
     #have we changed channels
     if self.name != name:
@@ -511,23 +576,24 @@ class CCEPPlot(pg.PlotItem):
         self.selected = True
 
   #plot: new name and link is only considered if we are dynamically sorting
-  def plotData(self):
-    children = self.listDataItems() #all plots
-    
-    #update colors for old plots
-    if self.p._maxPlots > 0:
-      extra = len(children) - self.p._maxPlots + 1  #account for 1 more we will plot
-      for i in range(extra):
-        self.removeItem(children[0])
-        children.pop(0)
-        self.link.database.pop(0)
-    expColors = [(255) * (1 - 2**(-x)) for x in np.linspace(0+1/(len(children)+1), 1-1/(len(children)+1), len(children))]
-    for child, c in zip(children[1:], expColors):
-      child.setPen(self.p.pens[int(c)])
+  def plotData(self, newData, maxPlots=0):
+    if newData:
+      children = self.listDataItems() #all plots
+      
+      if len(self.link.database) > len(children):
+        #update plots with newly computed data (will be true if chunking)
+        newPlots = len(self.link.database) - len(children)
+        #print("new plots: " + str(newPlots))
+        for i in range(newPlots):
+          self.plot(x = self.p.x, y = self.link.database[-i - 1])
 
-    #plot new data
-    p2 = 255*(1-2.5**(-1*(1-1/(len(self.link.database)+1))))
-    self.plot(x=self.p.x, y=self.link.database[-1], useCache=True, pen=self.p.pens[int(p2)], _callSync='off')
+      expColors = [(255) * (1 - 2**(-x)) for x in np.linspace(0+1/(len(children)+1), 1-1/(len(children)+1), len(children))]
+      for child, c in zip(children[1:], expColors):
+        child.setPen(self.p.pens[int(c)])
+
+      #plot new data
+      p2 = 255*(1-2.5**(-1*(1-1/(len(self.link.database)+1))))
+      self.plot(x=self.p.x, y=self.link.database[-1], useCache=True, pen=self.p.pens[int(p2)], _callSync='off')
     
     #update average plot
     if self.link.significant:
@@ -573,13 +639,14 @@ class CCEPCalc():
     elif not self.significant and self.tableItem.background() == empColor:
       self.tableItem.setBackground(pg.QtGui.QColor(0,0,0,0)) #transparent
 
-  def computeData(self, newData):        
+  def computeData(self, newData, avgPlots=True):        
     #new data, normalize amplitude with baseline data
     if self.p.baseSamples == 0:
       self.data = newData
       #stdBase = 0
     else:
-      avBase = np.mean(newData[:self.p.baseSamples])
+      #avBase = np.mean(newData[:self.p.baseSamples])
+      avBase = np.median(newData[:self.p.baseSamples])
       #stdBase = np.std(self.rawData[:self.p.baseSamples], dtype=np.float64)
       self.data = np.subtract(newData, avBase)
 
@@ -587,7 +654,7 @@ class CCEPCalc():
     self.database.append(self.data.copy())
 
     #possibly change to average, before we detect ccep
-    if self.p._avgPlots:
+    if avgPlots:
       #calculate average of plots
       self.data = np.mean(self.database, axis=0)
     
@@ -595,4 +662,9 @@ class CCEPCalc():
     ccepData = self.getActiveData(self.data)
     normData = ccepData - np.mean(ccepData)
     self.auc = np.trapz(abs(normData))/1e3
-    return self.auc
+
+  def chunkData(self, newData, peaks, avgPlots=True):
+    for peak in peaks:
+      data = newData[peak - self.p.baseSamples : peak + self.p.ccepSamples]
+      self.computeData(data, avgPlots)
+
