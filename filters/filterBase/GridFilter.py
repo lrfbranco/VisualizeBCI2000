@@ -23,6 +23,6 @@ class GridFilter(MasterFilter):
       self.numRows = 0
       self.numColumns = 0
     else:
-      self.numColumns = int(np.floor(np.sqrt(self.windows)))
+      self.numColumns = int(np.floor(np.sqrt(self.windows)))      # this is where the grid layout is coming from (sqrt of # windows to make square)
       self.numRows = int(np.ceil(self.windows / self.numColumns))
     pass

@@ -160,6 +160,7 @@ class CCEPFilter(GridFilter):
     self._maxWindows = self.p.child('General Options')['Max Windows']
     self._sortChs = self.p.child('General Options')['Sort channels']
     self._DBSLayout = self.p.child('General Options')['DBS Layout']
+    self._DBSLayout.setValue(False) # force DBS Layout checkbox to be set to unchecked state upon launch
     self._trigCh = self.p.child('Auto Detect Options')['Detection channel']
 
   def saveSettings(self):
@@ -359,36 +360,51 @@ class CCEPFilter(GridFilter):
 
   
   def applyDBSLayout(self, state):
-    if not hasattr(self, 'chTable') or not hasattr(self, 'tableRows'):    # ensures the self object has proper attributes
-        return
+    if not hasattr(self, 'chTable'):
+      return
+    
+    if state:
+      self.gridPlots.clear()
+      self.chPlot = {}
 
-    # if DBS layout is being turned off, revert to original order
-    if not state:
-        for ch in self.chTable.values():
-            ch.totalChanged(False)          # clear CCEP significance flags 
-        self.table.sortItems(Column.Name.value, QtCore.Qt.DescendingOrder)    # sorts rows in descending alphabetical order
-        self._renderPlots(newData=False)
-        return
+    left = {}
+    for chName in self.chTable:
+      if chName.lower().startswith("ch"):
+        try:
+            num = int(chName[2:])
+            if 1 <= num <= 8:
+                left[str(num)] = chName
+        except ValueError:
+            continue
 
-    # create separate lists for left and right hemisphere channels
-    # initialize two empty lists
-    left = []     
-    right = []
+    positions = {
+        "7": (1, 0), "8": (0, 1), "6": (1, 2),
+        "4": (2, 0), "5": (1, 1), "3": (2, 2),
+        "2": (2, 1),
+        "1": (3, 1)
+    }
 
-    for row in self.tableRows:
-        name = row.chName
-        if "_L" in name:
-            left.append(row)      # add to left list
-        elif "_R" in name:
-            right.append(row)
+    self.table.setRowCount(0)
 
-    # reorder the table
-    orderedRows = left + right  # concatenates left and right lists
-    for i, row in enumerate(orderedRows):
-        self.table.setItem(i, Column.Name.value, QtWidgets.QTableWidgetItem(row.chName))
-        self.chTable[row.chName].setTableItem(i)
+  # layout loop
+    i = 0 
+    for digit, (row, col) in positions.items():
+        chName = left.get(digit)
+        if chName:
+            self.chPlot[i] = CCEPPlot(self, title=chName, row=self.chTable[chName])
+            self.gridPlots.addItem(self.chPlot[i], row=row, col=col)
+            i += 1
 
-    self._renderPlots(newData=False)    # redraw plots in new order, ensures it does not recompute data
+  # add table rows for displayed channels
+    self.table.setRowCount(self.windows)
+    for i, chPlot in self.chPlot.items():
+      chName = chPlot.name
+      tableRow = self.tableRows[self.chNames.index(chName)]
+      tableRow.setTableItem(i)
+      tableRow.addRow(self.table)
+
+    self.windows = len(self.chPlot)
+    self._renderPlots(newData=False)
 
 
   def setSaveFigs(self, state):
