@@ -63,9 +63,13 @@ class TestBooleanParams(ptree.parameterTypes.GroupParameter):
     self.a = self.param('Sort channels')
     self.a.sigValueChanged.connect(self.aChanged)
 
-    self.addChild({'name': 'DBS Layout', 'type': 'bool', 'value': 0})
-    self.i = self.param('DBS Layout')
-    self.i.sigValueChanged.connect(self.iChanged)
+    self._dbsLeft = self.addChild({'name': 'DBS Layout Left', 'type': 'bool', 'value': 0})
+    self._dbsLeft = self.param('DBS Layout Left')
+    self._dbsLeft.sigValueChanged.connect(self.iChanged)
+
+    self._dbsRight = self.addChild({'name': 'DBS Layout Right', 'type': 'bool', 'value': 0})
+    self._dbsRight = self.param('DBS Layout Right')
+    self._dbsRight.sigValueChanged.connect(self.jChanged)
 
     self.addChild({'name': 'Average CCEPS', 'type': 'bool', 'value': 0})
     self.b = self.param('Average CCEPS')
@@ -108,7 +112,10 @@ class TestBooleanParams(ptree.parameterTypes.GroupParameter):
   def hChanged(self):
     self.p.clearFigures()
   def iChanged(self):
-    self.p.applyDBSLayout(self.i.value())
+    self.p.applyDBSLayout(self._dbsLeft.value() or self._dbsRight.value())
+  def jChanged(self):
+    self.p.applyDBSLayout(self._dbsLeft.value() or self._dbsRight.value())
+
 
 class CCEPFilter(GridFilter):
   def __init__(self, area, bciPath, stream):
@@ -160,15 +167,15 @@ class CCEPFilter(GridFilter):
       self.p.restoreState(pState, addChildren=False, removeChildren=False)
     self._maxWindows = self.p.child('General Options')['Max Windows']
     self._sortChs = self.p.child('General Options')['Sort channels']
-    self._DBSLayout = self.p.child('General Options')['DBS Layout']
-    self._DBSLayout.setValue(False) # force DBS Layout checkbox to be set to unchecked state upon launch
+    self._DBSLayout = self.p.child('General Options')['DBS Layout Left']
+    # self._DBSLayout.setValue(False) # force DBS Layout checkbox to be set to unchecked state upon launch
     self._trigCh = self.p.child('Auto Detect Options')['Detection channel']
 
   def saveSettings(self):
     super().saveSettings()
 
     self.settings.setValue("maskStart", self._maskStart)
-    self.settings.setValue("maskEnd", self._maskEnd)
+    self.settings.setValue("maskEnd", self._maskEnd) 
     self.settings.setValue("pState", self.p.saveState())
 
   #an attempt to abstract plotting from BCI2000
@@ -361,52 +368,99 @@ class CCEPFilter(GridFilter):
 
   
   def applyDBSLayout(self, state):
-    if not hasattr(self, 'chTable'):
-      return
-    
-    if state:
+    if state:   # if box is checked
+      if not hasattr(self, 'chTable'):
+        return
+      
       self.gridPlots.clear()
       self.chPlot = {}
 
-    left = {}
-    for chName in self.chTable:
-      if chName.lower().startswith("ch"):
-        try:
-            num = int(chName[2:])
-            if 1 <= num <= 8:
-                left[str(num)] = chName
-        except ValueError:
-            continue
+      leftOn = self.p.param('General Options', 'DBS Layout Left').value()
+      rightOn = self.p.param('General Options', 'DBS Layout Right').value()
 
-    positions = {
+      electrode = {}
+      positions = {}
+
+      if leftOn:
+        for chName in self.chTable:
+          if chName.lower().startswith("ch"):
+            try:
+              num = int(chName[2:])
+              if 1 <= num <= 8:
+                electrode[str(num)] = chName
+            except ValueError:
+              continue
+
+      positions = {
         "7": (1, 0), "8": (0, 1), "6": (1, 2),
         "4": (2, 0), "5": (1, 1), "3": (2, 2),
         "2": (2, 1),
         "1": (3, 1)
-    }
+      }
 
-    self.table.setRowCount(0)
+      if rightOn:
+        for chName in self.chTable:
+          if chName.lower().startswith("ch"):
+            try:
+              num = int(chName[2:])
+              if 9 <= num <= 16:
+                electrode[str(num)] = chName
+            except ValueError:
+              continue
 
-  # layout loop
-    i = 0 
-    for digit, (row, col) in positions.items():
-        chName = left.get(digit)
-        if chName:
-            self.chPlot[i] = CCEPPlot(self, title=chName, row=self.chTable[chName])
-            self.gridPlots.addItem(self.chPlot[i], row=row, col=col)
-            i += 1
+      positions.update({
+        "15": (1, 4), "16": (0, 5), "14": (1, 6),
+        "12": (2, 4), "13": (1, 5), "11": (2, 6),
+        "10": (2, 5),
+        "9": (3, 5)
+      })
 
-  # add table rows for displayed channels
-    self.table.setRowCount(self.windows)
-    for i, chPlot in self.chPlot.items():
-      chName = chPlot.name
-      tableRow = self.tableRows[self.chNames.index(chName)]
-      tableRow.setTableItem(i)
-      tableRow.addRow(self.table)
+      self.table.setRowCount(0)
 
-    self.windows = len(self.chPlot)
-    self._renderPlots(newData=False)
+    # layout loop
+      i = 0 
+      for digit, (row, col) in positions.items():
+          chName = electrode.get(digit)
+          if chName:
+              self.chPlot[i] = CCEPPlot(self, title=chName, row=self.chTable[chName])
+              self.gridPlots.addItem(self.chPlot[i], row=row, col=col)
+              i += 1
 
+    # add table rows for displayed channels
+      self.table.setRowCount(self.windows)
+      for i, chPlot in self.chPlot.items():
+        chName = chPlot.name
+        tableRow = self.tableRows[self.chNames.index(chName)]
+        tableRow.setTableItem(i)
+        tableRow.addRow(self.table)
+
+      self.windows = len(self.chPlot)
+      self._renderPlots(newData=False)
+
+    else:  # if box is unchecked
+      # Revert to original full layout
+      self.gridPlots.clear()
+      self.chPlot = {}
+
+      self.windows = min(self._maxWindows, self.channels)
+      self.numColumns = int(np.floor(np.sqrt(self.windows)))      # this is where the grid layout is coming from (sqrt of # windows to make square)
+      self.numRows = int(np.ceil(self.windows / self.numColumns))
+
+      for r in range(self.numRows):
+        for c in range(self.numColumns):
+          ch = r*self.numColumns+c
+          #print(self.chPlot)
+          if ch < self.windows:
+            chName = self.chNames[ch]
+            self.chPlot[ch] = CCEPPlot(self, title=chName, row=self.chTable[chName])
+            self.gridPlots.addItem(self.chPlot[ch])
+            if ch != 0:
+              self.chPlot[ch].setLink(self.chPlot[ch-1])
+            else:
+              self.chPlot[ch].showAxis('left')
+              self.chPlot[ch].showAxis('bottom')
+        self.gridPlots.nextRow()
+    
 
   def setSaveFigs(self, state):
     self._saveFigs = state
