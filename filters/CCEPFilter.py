@@ -196,7 +196,7 @@ class CCEPFilter(GridFilter):
 
     #find stim ch if possible
     stimCh = state[1].nonzero()[0]
-    if stimCh:
+    if stimCh.size > 0: # ensure array is not empty
       #just get first non-zero value
       chBits = state[1][stimCh[0]]
       self.stimChs.clear()
@@ -387,7 +387,7 @@ class CCEPFilter(GridFilter):
       if not hasattr(self, 'chTable'):
         return
       
-      self.gridPlots.clear()
+      #self.gridPlots.clear()
       self.chPlot = {}
 
       leftOn = self.p.param('General Options', 'DBS Layout Left').value()
@@ -788,8 +788,12 @@ class CCEPCalc():
     
     #get area under the curve
     ccepData = self.getActiveData(self.data)
-    normData = ccepData - np.mean(ccepData)
-    self.auc = np.trapz(abs(normData))/1e3
+    if ccepData.size > 0: # ensure array is not empty
+      normData = ccepData - np.mean(ccepData)
+      self.auc = np.trapz(abs(normData))/1e3
+    else:
+      self.auc = 0
+    
 
   def chunkData(self, newData, peaks, avgPlots=True):
     for peak in peaks:
