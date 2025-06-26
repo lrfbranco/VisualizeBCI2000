@@ -370,27 +370,23 @@ class CCEPFilter(GridFilter):
     self._maxWindows = spin.value()
   def setAvgPlots(self, state):
     self._avgPlots = state
+
+  
   def setSortChs(self, state):
     if hasattr(self, 'chTable') and self._sortChs and not state:
-      #re-initialize order
-      for ch in self.chTable.values():
-        ch.totalChanged(False)
-      self.table.sortItems(Column.Name.value, QtCore.Qt.DescendingOrder)
-    
-    self._sortChs = state
-    #plot everything again with original order
-    if hasattr(self, 'chTable'):
-      self._renderPlots(newData=False)
+        for ch in self.chTable.values():
+            ch.totalChanged(False)  # reset change flag (e.g., for AUC or highlighting)
+        self.table.sortItems(Column.Name.value, QtCore.Qt.DescendingOrder)
 
+    self._sortChs = state
+    if hasattr(self, 'chTable'):
+        self._renderPlots(newData=False)
   
   def applyDBSLayout(self, state):
     if not hasattr(self, 'chTable'):
       return
       
-    if state:   # if box is checked (DBS enabled)
-      self.gridPlots.clear()
-      #self.chPlot = {}
-
+    if state:   # if box is checked
       leftOn = self.p.param('General Options', 'DBS Layout Left').value()
       rightOn = self.p.param('General Options', 'DBS Layout Right').value()
 
@@ -430,8 +426,6 @@ class CCEPFilter(GridFilter):
         "10": (2, 5),
         "9": (3, 5)
       })
-
-      self.table.setRowCount(0) # clear all rows from GUI table, deletes all QTableWidgetItems
       self.displayedPlots = {}  # initialize empty dictionary that will hold subset of current plots being displayed
 
     # add dbs plots to grid and track them
@@ -444,55 +438,28 @@ class CCEPFilter(GridFilter):
                   self.gridPlots.addItem(chPlot, row=row, col=col)
                   self.displayedPlots[chIdx] = chPlot
 
-      # link plots in visual order
-      prevPlot = None
-      for digit in positions:
-          chName = electrode.get(digit)
-          if chName:
-              chIdx = self.chNames.index(chName)
-              chPlot = self.displayedPlots.get(chIdx)
-              if chPlot:
-                  if prevPlot:
-                      chPlot.setLink(prevPlot)
-                  else:
-                      chPlot.showAxis('left')
-                      chPlot.showAxis('bottom')
-                  prevPlot = chPlot
-
-      # update the table
-      self.table.setRowCount(len(self.displayedPlots))
-      for chIdx in self.displayedPlots:
-          if chIdx < len(self.tableRows):
-              tableRow = self.tableRows[chIdx]
-              tableRow.addRow(self.table)
-
       self.windows = len(self.displayedPlots)
       self._dbsLayout = True
       self._renderPlots(newData=False) # add new data?
 
     if self._dbsLayout and not state:  # if box is unchecked
-      # revert to original full layout
+      for ch in self.chTable.values():
+            ch.totalChanged(False)
+      self.table.sortItems(Column.Name.value, QtCore.Qt.DescendingOrder)
       self.gridPlots.clear()
-      self.chPlot = {}
+      self.displayedPlots = {}
 
-      self.windows = min(self._maxWindows, self.channels)
-      self.numColumns = int(np.floor(np.sqrt(self.windows)))      # this is where the grid layout is coming from (sqrt of # windows to make square)
-      self.numRows = int(np.ceil(self.windows / self.numColumns))
-
-      for r in range(self.numRows):
-        for c in range(self.numColumns):
-          ch = r*self.numColumns+c
-          #print(self.chPlot)
-          if ch < self.windows:
-            chName = self.chNames[ch]
-            self.chPlot[ch] = CCEPPlot(self, title=chName, row=self.chTable[chName])
-            self.gridPlots.addItem(self.chPlot[ch])
-            if ch != 0:
-              self.chPlot[ch].setLink(self.chPlot[ch-1])
-            else:
-              self.chPlot[ch].showAxis('left')
-              self.chPlot[ch].showAxis('bottom')
-        self.gridPlots.nextRow()
+      for i in range(self.table.rowCount()):
+          chName = self.table.item(i, 0).text()
+          chIdx = self.chNames.index(chName)
+          chPlot = self.chPlot[chIdx]
+          
+          row = i // self.numColumns
+          col = i % self.numColumns
+          self.gridPlots.addItem(chPlot, row=row, col=col)
+          self.displayedPlots[chIdx] = chPlot
+      self._dbsLayout = False
+      self._renderPlots(newData=False)
     
 
   def setSaveFigs(self, state):
