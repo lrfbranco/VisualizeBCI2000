@@ -40,6 +40,7 @@ class ScalableGroup(ptree.parameterTypes.GroupParameter):
         self.addChild({'name': 'Detection channel', 'type': 'str', 'value': "2", 'tip': 'Index or name'})
         self.b = self.param('Detection channel')
         self.b.sigValueChanged.connect(self.aChanged)
+        self._dbsLayout = False # initialize DBS layout to unchecked
     def aChanged(self):
       self.p.setAutoDetect(self.a.value())
     def bChanged(self):
@@ -174,7 +175,7 @@ class CCEPFilter(GridFilter):
       self.p.restoreState(pState, addChildren=False, removeChildren=False)
     self._maxWindows = self.p.child('General Options')['Max Windows']
     self._sortChs = self.p.child('General Options')['Sort channels']
-    self._DBSLayout = self.p.child('General Options')['DBS Layout Left']
+    self._dbsLayout = self.p.child('General Options')['DBS Layout Left']
     # self._DBSLayout.setValue(False) # force DBS Layout checkbox to be set to unchecked state upon launch
     self._trigCh = self.p.child('Auto Detect Options')['Detection channel']
 
@@ -217,7 +218,7 @@ class CCEPFilter(GridFilter):
       aocs = []
       chunk = False
       peaks = None
-      if self.p.child('Auto Detect Options')['Detection channel']:
+      if False: # self.p.child('Auto Detect Options')['Detection channel']:
         #trigCh = self.p.child('General Options')['Sort channels']
         #get channel to use as trigger
         try:
@@ -383,12 +384,12 @@ class CCEPFilter(GridFilter):
 
   
   def applyDBSLayout(self, state):
-    if state:   # if box is checked
-      if not hasattr(self, 'chTable'):
-        return
+    if not hasattr(self, 'chTable'):
+      return
       
-      #self.gridPlots.clear()
-      self.chPlot = {}
+    if state:   # if box is checked (DBS enabled)
+      self.gridPlots.clear()
+      #self.chPlot = {}
 
       leftOn = self.p.param('General Options', 'DBS Layout Left').value()
       rightOn = self.p.param('General Options', 'DBS Layout Right').value()
@@ -430,30 +431,47 @@ class CCEPFilter(GridFilter):
         "9": (3, 5)
       })
 
-      self.table.setRowCount(0)
+      self.table.setRowCount(0) # clear all rows from GUI table, deletes all QTableWidgetItems
+      self.displayedPlots = {}  # initialize empty dictionary that will hold subset of current plots being displayed
 
-    # layout loop
-      i = 0 
-      for digit, (row, col) in positions.items():
+    # add dbs plots to grid and track them
+      for digit, (row, col) in positions.items(): # iterates through each channel
           chName = electrode.get(digit)
           if chName:
-              self.chPlot[i] = CCEPPlot(self, title=chName, row=self.chTable[chName])
-              self.gridPlots.addItem(self.chPlot[i], row=row, col=col)
-              i += 1
+              chIdx = self.chNames.index(chName)
+              chPlot = self.chPlot[chIdx]
+              if chPlot:
+                  self.gridPlots.addItem(chPlot, row=row, col=col)
+                  self.displayedPlots[chIdx] = chPlot
 
-    # add table rows for displayed channels
-      self.table.setRowCount(self.windows)
-      for i, chPlot in self.chPlot.items():
-        chName = chPlot.name
-        tableRow = self.tableRows[self.chNames.index(chName)]
-        tableRow.setTableItem(i)
-        tableRow.addRow(self.table)
+      # link plots in visual order
+      prevPlot = None
+      for digit in positions:
+          chName = electrode.get(digit)
+          if chName:
+              chIdx = self.chNames.index(chName)
+              chPlot = self.displayedPlots.get(chIdx)
+              if chPlot:
+                  if prevPlot:
+                      chPlot.setLink(prevPlot)
+                  else:
+                      chPlot.showAxis('left')
+                      chPlot.showAxis('bottom')
+                  prevPlot = chPlot
 
-      self.windows = len(self.chPlot)
-      self._renderPlots(newData=False)
+      # update the table
+      self.table.setRowCount(len(self.displayedPlots))
+      for chIdx in self.displayedPlots:
+          if chIdx < len(self.tableRows):
+              tableRow = self.tableRows[chIdx]
+              tableRow.addRow(self.table)
 
-    else:  # if box is unchecked
-      # Revert to original full layout
+      self.windows = len(self.displayedPlots)
+      self._dbsLayout = True
+      self._renderPlots(newData=False) # add new data?
+
+    if self._dbsLayout and not state:  # if box is unchecked
+      # revert to original full layout
       self.gridPlots.clear()
       self.chPlot = {}
 
