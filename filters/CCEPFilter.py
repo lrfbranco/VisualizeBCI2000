@@ -113,8 +113,15 @@ class TestBooleanParams(ptree.parameterTypes.GroupParameter):
   def hChanged(self):
     self.p.clearFigures()
   def iChanged(self):
+    # avoid sorting channels & dbs simultaneously
+    if self.p.setSortChs:
+        self.p.setSortChs = False
+        QtWidgets.QMessageBox.warning(None, "Warning", "Sort Channels has been disabled because DBS Layout was activated.")
     self.p.applyDBSLayout(self._dbsLeft.value() or self._dbsRight.value())
   def jChanged(self):
+    if self.p.setSortChs:
+        self.p.setSortChs = False
+        QtWidgets.QMessageBox.warning(None, "Warning", "Sort Channels has been disabled because DBS Layout was activated.")
     self.p.applyDBSLayout(self._dbsLeft.value() or self._dbsRight.value())
 
 
@@ -193,7 +200,6 @@ class CCEPFilter(GridFilter):
   #define abstract methods
   def receiveStates(self, state):
     #get CCEPTriggered state to detect CCEPs
-    self.numTrigs += np.count_nonzero(state[0])
 
     #find stim ch if possible
     stimCh = state[1].nonzero()[0]
@@ -205,7 +211,11 @@ class CCEPFilter(GridFilter):
       for b in range(len(chBinary)): #32 bit state
         if chBinary[len(chBinary) - b - 1] == '1':
           #print(self.chNames[b] + " at " + str(b))
-          self.stimChs.append(self.chNames[b]) #append ch name
+          # add check for out of bounds indexing
+          if b < len(self.chNames):
+            self.stimChs.append(self.chNames[b]) #append ch name
+          else:
+            print(f"[WARN] Bit position {b} exceeds available channels ({len(self.chNames)})")
 
   
   def plot(self, data):
@@ -218,7 +228,7 @@ class CCEPFilter(GridFilter):
       aocs = []
       chunk = False
       peaks = None
-      if False: # self.p.child('Auto Detect Options')['Detection channel']:
+      if self.p.child('Auto Detect Options')['Detection channel']:
         #trigCh = self.p.child('General Options')['Sort channels']
         #get channel to use as trigger
         try:
@@ -374,10 +384,10 @@ class CCEPFilter(GridFilter):
   
   def setSortChs(self, state):
     if hasattr(self, 'chTable') and self._sortChs and not state:
-        for ch in self.chTable.values():
-            ch.totalChanged(False)  # reset change flag (e.g., for AUC or highlighting)
-        self.table.sortItems(Column.Name.value, QtCore.Qt.DescendingOrder)
-
+      #re-initialize order
+      for ch in self.chTable.values():
+        ch.totalChanged(False)
+      self.table.sortItems(Column.Name.value, QtCore.Qt.DescendingOrder)
     self._sortChs = state
     if hasattr(self, 'chTable'):
         self._renderPlots(newData=False)
@@ -444,21 +454,32 @@ class CCEPFilter(GridFilter):
 
     if self._dbsLayout and not state:  # if box is unchecked
       for ch in self.chTable.values():
-            ch.totalChanged(False)
+        ch.totalChanged(False) # reset flags
       self.table.sortItems(Column.Name.value, QtCore.Qt.DescendingOrder)
-      self.gridPlots.clear()
-      self.displayedPlots = {}
 
-      for i in range(self.table.rowCount()):
-          chName = self.table.item(i, 0).text()
-          chIdx = self.chNames.index(chName)
-          chPlot = self.chPlot[chIdx]
-          
-          row = i // self.numColumns
-          col = i % self.numColumns
-          self.gridPlots.addItem(chPlot, row=row, col=col)
-          self.displayedPlots[chIdx] = chPlot
       self._dbsLayout = False
+
+      # Restore default full layout
+      self.gridPlots.clear()
+      self.chPlot = {}
+
+      self.windows = min(self._maxWindows, self.channels) # 16 ???
+      self.numColumns = int(np.floor(np.sqrt(self.windows)))
+      self.numRows = int(np.ceil(self.windows / self.numColumns))
+
+      for r in range(self.numRows):
+        for c in range(self.numColumns):
+          ch = r*self.numColumns+c
+          if ch < self.windows:
+            chName = self.chNames[ch]
+            self.chPlot[ch] = CCEPPlot(self, title=chName, row=self.chTable[chName])
+            self.gridPlots.addItem(self.chPlot[ch])
+            if ch != 0:
+              self.chPlot[ch].setLink(self.chPlot[ch-1])
+            else:
+              self.chPlot[ch].showAxis('left')
+              self.chPlot[ch].showAxis('bottom')
+      self.gridPlots.nextRow()
       self._renderPlots(newData=False)
     
 
@@ -594,7 +615,7 @@ class TableRow():
       pass
     #define less than (<) operator for table sorting
     def __lt__(self, b):
-      return (self.p.rank + self.p.sig*self.p.max) < (b.p.rank + b.p.sig*b.p.max)
+      return bool((self.p.rank + self.p.sig*self.p.max) < (b.p.rank + b.p.sig*b.p.max))   # force comparison result to be native python bool to avoid type error
   def __init__(self, i, row, col, fig, chName, elName, maxVal):
     self.plotR = row
     self.plotC = col
