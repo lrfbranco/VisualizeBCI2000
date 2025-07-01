@@ -201,6 +201,8 @@ class CCEPFilter(GridFilter):
   #define abstract methods
   def receiveStates(self, state):
     #get CCEPTriggered state to detect CCEPs
+    self.numTrigs += np.count_nonzero(state[0]) # keep running count of when CCEPTrigger occurs
+    # print(f"[DEBUG] numTrigs: {self.numTrigs}")   # confirm numTrigs is updating
 
     #find stim ch if possible
     stimCh = state[1].nonzero()[0]
@@ -804,6 +806,19 @@ class CCEPCalc():
 
   def chunkData(self, newData, peaks, avgPlots=True):
     for peak in peaks:
-      data = newData[peak - self.p.baseSamples : peak + self.p.ccepSamples]
+      start = peak - self.p.baseSamples # calculate start index
+      end = peak + self.p.ccepSamples # calculate end index
+
+      # trim indices to be within valid data range (bounds check)
+      start_clipped = max(0, start)
+      end_clipped = min(len(newData), end)
+
+      data = newData[start_clipped:end_clipped] # replaced: data = newData[peak - self.p.baseSamples : peak + self.p.ccepSamples]
+
+      # pad data to avoid size mismatch error
+      if len(data) < self.p.elements:
+          pad_width = self.p.elements - len(data)
+          data = np.pad(data, (0, pad_width), mode='constant')
+
       self.computeData(data, avgPlots)
 
