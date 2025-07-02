@@ -100,11 +100,26 @@ class TestBooleanParams(ptree.parameterTypes.GroupParameter):
 
     # Filtering buttons/dropdowns
     param = Parameter.create(name='Filters', type='group', children=[
-        {'name': 'Frequency', 'type': 'list', 'limits': [100, 130, 160], 'value': 130},
-        {'name': 'Amplitude', 'type': 'list', 'limits': [0.5, 1.0, 1.5], 'value': 1.0},
-        {'name': 'Stimulation Channel', 'type': 'list', 'limits': list(range(1,17)), 'value': 1}
+        {'name': 'Frequency', 'type': 'list', 'limits': ['All', 100, 130, 160], 'value': 130},
+        {'name': 'Amplitude', 'type': 'list', 'limits': ['All', 0.5, 1.0, 1.5], 'value': 1.0},
+        {'name': 'Stimulation Channel', 'type': 'list', 'limits': ['All'] + list(range(1,17)), 'value': 1},
+        {'name': 'Filter Data', 'type': 'action'}
     ])
     self.addChild(param)
+
+    self.filterFreq = self.param('Filters', 'Frequency')
+    self.filterAmp = self.param('Filters', 'Amplitude')
+    self.filterStim = self.param('Filters', 'Stimulation Channel')
+    self.filterButton = self.param('Filters', 'Filter Data')
+
+    self.filterButton.sigActivated.connect(self.local_filter_data)  # connect button to filter function
+
+  def local_filter_data(self):
+    # collect filter values locally and send to filter_data function
+    freq = self.filterFreq.value()
+    amp = self.filterAmp.value()
+    stim = self.filterStim.value()
+    self.p.filter_data(freq, amp, stim)
 
   def aChanged(self):
     self.p.setSortChs(self.a.value())
@@ -278,7 +293,7 @@ class CCEPFilter(GridFilter):
           fake_meta = {
               'amplitude': np.random.choice([0.5, 1.0, 1.5]),
               'frequency': np.random.choice([100, 130, 160]),
-              'stim_channel': np.random.choice([list(range(1,17))]),
+              'stim_channel': np.random.choice(list(range(1,17))),
               'timestamp': 2.0,  # arbitrary
               'trial_id': np.random.randint(1, 10)
           }
@@ -511,7 +526,20 @@ class CCEPFilter(GridFilter):
               self.chPlot[ch].showAxis('bottom')
       self.gridPlots.nextRow()
       self._renderPlots(newData=False)
-    
+
+  def filter_data(self, freq, amp, stim):
+      # create query dictionary
+      query = {}
+      if freq != 'All':
+          query['frequency'] = freq
+      if amp != 'All':
+          query['amplitude'] = amp
+      if stim != 'All':
+          query['stim_channel'] = stim
+      
+      # retrieve matching data
+      results = get_partial(query)
+      print(f"Filter results: {len(results)} entries found for query {query}")
 
   def setSaveFigs(self, state):
     self._saveFigs = state
