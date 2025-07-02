@@ -11,6 +11,7 @@ from enum import Enum
 from scipy.signal import find_peaks
 from math import ceil
 from nested_defaultdict_store import add_chunk, get_group, get_partial
+from pyqtgraph.parametertree import Parameter
 
 backgroundColor = (14, 14, 16)
 highlightColor = (60, 60, 40)
@@ -96,6 +97,14 @@ class TestBooleanParams(ptree.parameterTypes.GroupParameter):
     self.addChild({'name': 'Clear Figures', 'type': 'action'})
     self.h = self.param('Clear Figures')
     self.h.sigActivated.connect(self.hChanged)
+
+    # Filtering buttons/dropdowns
+    param = Parameter.create(name='Filters', type='group', children=[
+        {'name': 'Frequency', 'type': 'list', 'limits': [100, 130, 160], 'value': 130},
+        {'name': 'Amplitude', 'type': 'list', 'limits': [0.5, 1.0, 1.5], 'value': 1.0},
+        {'name': 'Stimulation Channel', 'type': 'list', 'limits': list(range(1,17)), 'value': 1}
+    ])
+    self.addChild(param)
 
   def aChanged(self):
     self.p.setSortChs(self.a.value())
@@ -264,7 +273,24 @@ class CCEPFilter(GridFilter):
       avgPlots = self.p.child('General Options')['Average CCEPS']
       for i, ch in enumerate(self.chTable.values()):
         if chunk:
-          ch.chunkData(data[i], peaks, avgPlots) #chunks and computes
+          ch.chunkData(data[i], peaks, avgPlots) #chunks and computes (processes); splits data into segments around detected peaks
+          # hardcode fake metadata
+          fake_meta = {
+              'amplitude': np.random.choice([0.5, 1.0, 1.5]),
+              'frequency': np.random.choice([100, 130, 160]),
+              'stim_channel': np.random.choice([list(range(1,17))]),
+              'timestamp': 2.0,  # arbitrary
+              'trial_id': np.random.randint(1, 10)
+          }
+
+          # add processed data chunk to nested storage
+          add_chunk(ch.data.copy(), fake_meta)
+          print(f"Added chunk with metadata: {fake_meta}")
+
+          test_query = {'frequency': fake_meta['frequency']}
+          results = get_partial(test_query)
+          print(f"Retrieved {len(results)} entries for frequency {fake_meta['frequency']}")
+
         else:
           ch.computeData(data[i], avgPlots) #compute data
         aocs.append(ch.auc)
