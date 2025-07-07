@@ -100,9 +100,9 @@ class TestBooleanParams(ptree.parameterTypes.GroupParameter):
 
     # Filtering buttons/dropdowns
     param = Parameter.create(name='Filters', type='group', children=[
-        {'name': 'Frequency', 'type': 'list', 'limits': ['All', 100, 130, 160], 'value': 130},
-        {'name': 'Amplitude', 'type': 'list', 'limits': ['All', 0.5, 1.0, 1.5], 'value': 1.0},
-        {'name': 'Stimulation Channel', 'type': 'list', 'limits': ['All'] + list(range(1,17)), 'value': 1},
+        {'name': 'Frequency', 'type': 'list', 'limits': ['All', 100, 130, 160], 'value': 'All'},
+        {'name': 'Amplitude', 'type': 'list', 'limits': ['All', 0.5, 1.0, 1.5], 'value': 'All'},
+        {'name': 'Stimulation Channel', 'type': 'list', 'limits': ['All'] + [str(i) for i in range(1,17)], 'value': 'All'},
         {'name': 'Filter Data', 'type': 'action'}
     ])
     self.addChild(param)
@@ -152,6 +152,7 @@ class TestBooleanParams(ptree.parameterTypes.GroupParameter):
 
 class CCEPFilter(GridFilter):
   def __init__(self, area, bciPath, stream):
+    self.epoch_count = 0
     super().__init__(area, bciPath, stream)
     self.aucThresh = 0
     self.numTrigs = 0
@@ -176,6 +177,8 @@ class CCEPFilter(GridFilter):
     self.p = ptree.Parameter.create(name="Settings", type='group', children=params, title=None)
     self.t = ptree.ParameterTree()
     self.t.setParameters(self.p)
+    self.p.addChild({'name': 'Epoch Count', 'type': 'int', 'value': self.epoch_count, 'readonly': True})
+    self.epochDisplay = self.p.param('Epoch Count')
     #self.t.setParameters(params)
     #self.t.resizeColumnToContents(0)
     self.t.header().setSectionResizeMode(pg.QtWidgets.QHeaderView.Stretch)
@@ -300,11 +303,14 @@ class CCEPFilter(GridFilter):
 
           # add processed data chunk to nested storage
           add_chunk(ch.data.copy(), fake_meta)
-          print(f"Added chunk with metadata: {fake_meta}")
+          self.epoch_count += 1
+          # print(self.epoch_count)
+          self.epochDisplay.setValue(self.epoch_count)
+          # print(f"Added chunk with metadata: {fake_meta}")
 
           test_query = {'frequency': fake_meta['frequency']}
           results = get_partial(test_query)
-          print(f"Retrieved {len(results)} entries for frequency {fake_meta['frequency']}")
+          # print(f"Retrieved {len(results)} entries for frequency {fake_meta['frequency']}")
 
         else:
           ch.computeData(data[i], avgPlots) #compute data
@@ -539,7 +545,12 @@ class CCEPFilter(GridFilter):
       
       # retrieve matching data
       results = get_partial(query)
-      print(f"Filter results: {len(results)} entries found for query {query}")
+      if results:
+          data_chunk = results[0]['data']
+          # plot this data_chunk on one of your existing CCEP plots or in a debug plot window
+      else:
+          print("No matching results found.")
+      #print(f"Filter results: {len(results)} entries found for query {query}")
 
   def setSaveFigs(self, state):
     self._saveFigs = state
