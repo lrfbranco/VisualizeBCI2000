@@ -1,0 +1,14 @@
+1:
+git fetch upstream
+
+✅ To see the latest commit from upstream/main:
+git log upstream/main --oneline -n 5
+
+2:
+git merge upstream/main
+
+3:
+fix conflicts
+
+4:
+git push origin main
