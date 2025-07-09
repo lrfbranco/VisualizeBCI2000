@@ -233,20 +233,17 @@ class CCEPFilter(GridFilter):
     # print(f"[DEBUG] numTrigs: {self.numTrigs}")   # confirm numTrigs is updating
 
     #find stim ch if possible
-    stimCh = state[1].nonzero()[0]
-    if stimCh.size > 0: # ensure array is not empty
-      #just get first non-zero value
-      chBits = state[1][stimCh[0]]
-      self.stimChs.clear()
-      chBinary = str("{0:b}".format(chBits))
-      for b in range(len(chBinary)): #32 bit state
-        if chBinary[len(chBinary) - b - 1] == '1':
-          #print(self.chNames[b] + " at " + str(b))
-          # add check for out of bounds indexing
-          if b < len(self.chNames):
+    if np.shape(state)[0] > 1:
+      stimCh = state[1].nonzero()[0]
+      if stimCh:
+        #just get first non-zero value
+        chBits = state[1][stimCh[0]]
+        self.stimChs.clear()
+        chBinary = str("{0:b}".format(chBits))
+        for b in range(len(chBinary)): #32 bit state
+          if chBinary[len(chBinary) - b - 1] == '1':
+            #print(self.chNames[b] + " at " + str(b))
             self.stimChs.append(self.chNames[b]) #append ch name
-          else:
-            print(f"[WARN] Bit position {b} exceeds available channels ({len(self.chNames)})")
 
   
   def plot(self, data):
