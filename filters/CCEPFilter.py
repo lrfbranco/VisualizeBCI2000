@@ -235,7 +235,7 @@ class CCEPFilter(GridFilter):
     #find stim ch if possible
     if np.shape(state)[0] > 1:
       stimCh = state[1].nonzero()[0]
-      if stimCh:
+      if stimCh.size > 0:
         #just get first non-zero value
         chBits = state[1][stimCh[0]]
         self.stimChs.clear()
@@ -243,7 +243,10 @@ class CCEPFilter(GridFilter):
         for b in range(len(chBinary)): #32 bit state
           if chBinary[len(chBinary) - b - 1] == '1':
             #print(self.chNames[b] + " at " + str(b))
-            self.stimChs.append(self.chNames[b]) #append ch name
+            if b < len(self.chNames):
+              self.stimChs.append(self.chNames[b]) #append ch name
+            else:
+              print(f"[WARN] Bit position {b} exceeds available channels ({len(self.chNames)})") #append ch name
 
   
   def plot(self, data):
@@ -268,16 +271,20 @@ class CCEPFilter(GridFilter):
           except:
             self.logPrint(self._trigCh + " is not a valid channel name")
             chIndex = 1
-        self.trigData = data[chIndex - 1] #convert to 0-based
+        self.trigData = data[chIndex - 1] #convert to 0-based, retreive last channel (trigger channel)
 
         #get chunks by peaks
         #hard code parameters just to test
-        peaks, properties = find_peaks(self.trigData, 100, distance=10)
+        # print(f"Trigger data max: {np.max(self.trigData)}, min: {np.min(self.trigData)}")
+
+        peaks, properties = find_peaks(self.trigData, 1, distance=1)    # changed values for testing
+        # print(self.trigData)
         print(f"Found {len(peaks)} peaks")
-        if len(peaks) <= 1:
-          chunk = False
-        else:
+        if len(peaks) >= 1:   # our data has only one peak, so consider ir
           chunk = True
+        else:
+          chunk = False
+        # print(chunk)
 
         # #chunk based off artifact
         # for i, ch in enumerate(self.chTable.values()):
@@ -288,6 +295,7 @@ class CCEPFilter(GridFilter):
       avgPlots = self.p.child('General Options')['Average CCEPS']
       for i, ch in enumerate(self.chTable.values()):
         if chunk:
+          # print("in the if statement")
           ch.chunkData(data[i], peaks, avgPlots) #chunks and computes (processes); splits data into segments around detected peaks
           # hardcode fake metadata
           fake_meta = {
@@ -300,9 +308,6 @@ class CCEPFilter(GridFilter):
 
           # add processed data chunk to nested storage
           add_chunk(ch.data.copy(), fake_meta)
-          self.epoch_count += 1
-          # print(self.epoch_count)
-          self.epochDisplay.setValue(self.epoch_count)
           # print(f"Added chunk with metadata: {fake_meta}")
 
           test_query = {'frequency': fake_meta['frequency']}
@@ -311,7 +316,10 @@ class CCEPFilter(GridFilter):
 
         else:
           ch.computeData(data[i], avgPlots) #compute data
+          #print("we are in the else")
         aocs.append(ch.auc)
+      self.epoch_count += 1
+      self.epochDisplay.setValue(self.epoch_count)
       
       #send processed data
       self.dataProcessedSignal.emit(aocs)
