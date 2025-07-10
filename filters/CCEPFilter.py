@@ -98,6 +98,10 @@ class TestBooleanParams(ptree.parameterTypes.GroupParameter):
     self.h = self.param('Clear Figures')
     self.h.sigActivated.connect(self.hChanged)
 
+    self.addChild({'name': 'View ERNA Dictionary', 'type': 'action'})
+    self.p.viewDictButton = self.param('View ERNA Dictionary')
+    self.p.viewDictButton.sigActivated.connect(self.viewDictClicked)
+
     # Filtering buttons/dropdowns
     param = Parameter.create(name='Filters', type='group', children=[
         {'name': 'Frequency', 'type': 'list', 'limits': ['All', 100, 130, 160], 'value': 'All'},
@@ -113,6 +117,9 @@ class TestBooleanParams(ptree.parameterTypes.GroupParameter):
     self.filterButton = self.param('Filters', 'Filter Data')
 
     self.filterButton.sigActivated.connect(self.local_filter_data)  # connect button to filter function
+
+  def viewDictClicked(self):
+      self.p.view_ERNA_dict()
 
   def local_filter_data(self):
     # collect filter values locally and send to filter_data function
@@ -141,22 +148,22 @@ class TestBooleanParams(ptree.parameterTypes.GroupParameter):
     # avoid sorting channels & dbs simultaneously
     if self.p.setSortChs:
         self.p.setSortChs = False
-        QtWidgets.QMessageBox.warning(None, "Warning", "Sort Channels has been disabled because DBS Layout was activated.")
+        #QtWidgets.QMessageBox.warning(None, "Warning", "Sort Channels has been disabled because DBS Layout was activated.")
     self.p.applyDBSLayout(self._dbsLeft.value() or self._dbsRight.value())
   def jChanged(self):
     if self.p.setSortChs:
         self.p.setSortChs = False
-        QtWidgets.QMessageBox.warning(None, "Warning", "Sort Channels has been disabled because DBS Layout was activated.")
+        #QtWidgets.QMessageBox.warning(None, "Warning", "Sort Channels has been disabled because DBS Layout was activated.")
     self.p.applyDBSLayout(self._dbsLeft.value() or self._dbsRight.value())
 
 
 class CCEPFilter(GridFilter):
   def __init__(self, area, bciPath, stream):
-    self.epoch_count = 0
     super().__init__(area, bciPath, stream)
     self.aucThresh = 0
     self.numTrigs = 0
 
+    self.previous_ERNA = {}
 
   def publish(self):
     super().publish()
@@ -177,8 +184,12 @@ class CCEPFilter(GridFilter):
     self.p = ptree.Parameter.create(name="Settings", type='group', children=params, title=None)
     self.t = ptree.ParameterTree()
     self.t.setParameters(self.p)
+
+    self.epoch_count = 0
     self.p.addChild({'name': 'Epoch Count', 'type': 'int', 'value': self.epoch_count, 'readonly': True})
     self.epochDisplay = self.p.param('Epoch Count')
+    self.epochDisplay.setValue(self.epoch_count)
+
     #self.t.setParameters(params)
     #self.t.resizeColumnToContents(0)
     self.t.header().setSectionResizeMode(pg.QtWidgets.QHeaderView.Stretch)
@@ -206,9 +217,9 @@ class CCEPFilter(GridFilter):
       self.p.restoreState(pState, addChildren=False, removeChildren=False)
     self._maxWindows = self.p.child('General Options')['Max Windows']
     self._sortChs = self.p.child('General Options')['Sort channels']
-    self._dbsLayout = self.p.child('General Options')['DBS Layout Left']
-    # self._DBSLayout.setValue(False) # force DBS Layout checkbox to be set to unchecked state upon launch
     self._trigCh = self.p.child('Auto Detect Options')['Detection channel']
+    self.epoch_count = 0
+    self.epochDisplay.setValue(self.epoch_count)    # set epoch count to zero upon restarting GUI
 
   def saveSettings(self):
     super().saveSettings()
@@ -280,7 +291,7 @@ class CCEPFilter(GridFilter):
         peaks, properties = find_peaks(self.trigData, 1, distance=1)    # changed values for testing
         # print(self.trigData)
         print(f"Found {len(peaks)} peaks")
-        if len(peaks) >= 1:   # our data has only one peak, so consider ir
+        if len(peaks) >= 1:   # our data has only one peak, so consider it
           chunk = True
         else:
           chunk = False
@@ -297,6 +308,7 @@ class CCEPFilter(GridFilter):
         if chunk:
           # print("in the if statement")
           ch.chunkData(data[i], peaks, avgPlots) #chunks and computes (processes); splits data into segments around detected peaks
+          
           # hardcode fake metadata
           fake_meta = {
               'amplitude': np.random.choice([0.5, 1.0, 1.5]),
@@ -306,9 +318,19 @@ class CCEPFilter(GridFilter):
               'trial_id': np.random.randint(1, 10)
           }
 
+          frequency = fake_meta['frequency']
+          amplitude = fake_meta['amplitude']
+          stim_channel = fake_meta['stim_channel']
+          key = (frequency, amplitude, stim_channel)
+
           # add processed data chunk to nested storage
           add_chunk(ch.data.copy(), fake_meta)
           # print(f"Added chunk with metadata: {fake_meta}")
+
+          # add chunk to erna dictionary
+          if key not in self.previous_ERNA:
+              self.previous_ERNA[key] = []
+          self.previous_ERNA[key].append(ch.data.copy())
 
           test_query = {'frequency': fake_meta['frequency']}
           results = get_partial(test_query)
@@ -456,48 +478,38 @@ class CCEPFilter(GridFilter):
       leftOn = self.p.param('General Options', 'DBS Layout Left').value()
       rightOn = self.p.param('General Options', 'DBS Layout Right').value()
 
-      electrode = {}
       positions = {}
 
       if leftOn:
-        for chName in self.chTable:
-          if chName.lower().startswith("ch"):
-            try:
-              num = int(chName[2:])
-              if 1 <= num <= 8:
-                electrode[str(num)] = chName
-            except ValueError:
-              continue
-
-      positions = {
-        "7": (1, 0), "8": (0, 1), "6": (1, 2),
-        "4": (2, 0), "5": (1, 1), "3": (2, 2),
-        "2": (2, 1),
-        "1": (3, 1)
-      }
-
+        positions = {
+          "Lv4_L":  (0, 1),
+          "Lv3C_L": (1, 0),
+          "Lv3A_L": (1, 1),
+          "Lv3B_L": (1, 2),
+          "Lv2C_L": (2, 0),
+          "Lv2A_L": (2, 1),
+          "Lv2B_L": (2, 2),
+          "Lv1_L":  (3, 1),
+        }
+      
       if rightOn:
-        for chName in self.chTable:
-          if chName.lower().startswith("ch"):
-            try:
-              num = int(chName[2:])
-              if 9 <= num <= 16:
-                electrode[str(num)] = chName
-            except ValueError:
-              continue
+        positions = {
+          "Lv4_R":  (0, 1),
+          "Lv3C_R": (1, 0),
+          "Lv3A_R": (1, 1),
+          "Lv3B_R": (1, 2),
+          "Lv2C_R": (2, 0),
+          "Lv2A_R": (2, 1),
+          "Lv2B_R": (2, 2),
+          "Lv1_R":  (3, 1),
+        }
 
-      positions.update({
-        "15": (1, 4), "16": (0, 5), "14": (1, 6),
-        "12": (2, 4), "13": (1, 5), "11": (2, 6),
-        "10": (2, 5),
-        "9": (3, 5)
-      })
       self.displayedPlots = {}  # initialize empty dictionary that will hold subset of current plots being displayed
+      self.gridPlots.clear()
 
     # add dbs plots to grid and track them
-      for digit, (row, col) in positions.items(): # iterates through each channel
-          chName = electrode.get(digit)
-          if chName:
+      for chName, (row, col) in positions.items(): # iterates through each channel
+          if chName in self.chTable:
               chIdx = self.chNames.index(chName)
               chPlot = self.chPlot[chIdx]
               if chPlot:
@@ -506,37 +518,34 @@ class CCEPFilter(GridFilter):
 
       self.windows = len(self.displayedPlots)
       self._dbsLayout = True
-      self._renderPlots(newData=False) # add new data?
+      #self._renderPlots(newData=False) # add new data?
 
     if self._dbsLayout and not state:  # if box is unchecked
-      for ch in self.chTable.values():
-        ch.totalChanged(False) # reset flags
-      self.table.sortItems(Column.Name.value, QtCore.Qt.DescendingOrder)
+        for ch in self.chTable.values():
+            ch.totalChanged(False)  # reset flags
+        self.table.sortItems(Column.Name.value, QtCore.Qt.DescendingOrder)
 
-      self._dbsLayout = False
+        self._dbsLayout = False
 
-      # Restore default full layout
-      self.gridPlots.clear()
-      self.chPlot = {}
+        self.gridPlots.clear()
+        self.displayedPlots = {}
 
-      self.windows = min(self._maxWindows, self.channels) # 16 ???
-      self.numColumns = int(np.floor(np.sqrt(self.windows)))
-      self.numRows = int(np.ceil(self.windows / self.numColumns))
+        self.windows = min(self._maxWindows, self.channels)
+        self.numColumns = int(np.floor(np.sqrt(self.windows)))
+        self.numRows = int(np.ceil(self.windows / self.numColumns))
 
-      for r in range(self.numRows):
-        for c in range(self.numColumns):
-          ch = r*self.numColumns+c
-          if ch < self.windows:
-            chName = self.chNames[ch]
-            self.chPlot[ch] = CCEPPlot(self, title=chName, row=self.chTable[chName])
-            self.gridPlots.addItem(self.chPlot[ch])
-            if ch != 0:
-              self.chPlot[ch].setLink(self.chPlot[ch-1])
-            else:
-              self.chPlot[ch].showAxis('left')
-              self.chPlot[ch].showAxis('bottom')
-      self.gridPlots.nextRow()
-      self._renderPlots(newData=False)
+        for r in range(self.numRows):
+            for c in range(self.numColumns):
+                ch = r * self.numColumns + c
+                if ch < self.windows:
+                    chName = self.chNames[ch]
+                    chIdx = self.chNames.index(chName)
+                    chPlot = self.chPlot[chIdx]  # use existing plot
+                    if chPlot:
+                        self.gridPlots.addItem(chPlot, row=r, col=c)
+                        self.displayedPlots[chIdx] = chPlot
+
+        self._renderPlots(newData=False)
 
   def filter_data(self, freq, amp, stim):
       # create query dictionary
@@ -678,6 +687,12 @@ class CCEPFilter(GridFilter):
           self.table.setRowHidden(r, True)
         else:
           self.table.setRowHidden(r, False)
+
+  def view_ERNA_dict(self):
+    print("\n==== Previous ERNA Dictionary ====")
+    for key, chunks in self.previous_ERNA.items():
+        print(f"Key: {key} | Number of epochs: {len(chunks)}")
+    print("==================================\n")
 
 class TableRow():
   class TableItem(QtWidgets.QTableWidgetItem):
