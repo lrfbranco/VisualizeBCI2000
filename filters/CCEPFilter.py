@@ -11,8 +11,9 @@ from enum import Enum
 from scipy.signal import find_peaks
 from math import ceil
 from nested_defaultdict_store import add_chunk, get_group, get_partial
-from nested_defaultdict_store import root
+from nested_defaultdict_store import root, metadata_keys
 from pyqtgraph.parametertree import Parameter
+from collections import deque # used for rolling buffer
 
 backgroundColor = (14, 14, 16)
 highlightColor = (60, 60, 40)
@@ -171,6 +172,8 @@ class CCEPFilter(GridFilter):
     super().__init__(area, bciPath, stream)
     self.aucThresh = 0
     self.numTrigs = 0
+
+    self.erna_buffer = deque(maxlen=3) # create a rolling buffer of the last 10 erna detections
 
   def publish(self):
     super().publish()
@@ -335,19 +338,24 @@ class CCEPFilter(GridFilter):
             'trial_id': self.epoch_count
         }
 
-        frequency = fake_meta['frequency']
-        amplitude = fake_meta['amplitude']
-        stim_channel = fake_meta['stim_channel']
-        key = (frequency, amplitude, stim_channel)
-
         # process all channels
         for i, ch in enumerate(self.chTable.values()):
             ch.chunkData(data[i], peaks, avgPlots)
             add_chunk(ch.data.copy(), fake_meta)
 
+            is_detected = ch.auc > 1 # arbitrary threshold used for testing
+            self.erna_buffer.append({
+              'detected': is_detected,
+              'auc': ch.auc
+            })
+
         self.epoch_count += 1
         self.epochDisplay.setValue(self.epoch_count)
         self.update_filter_dropdowns()
+        stability = self.compute_stability()
+        if stability:
+            print(f"ERNA Stability ➔ Detection rate: {stability['detection_rate']*100:.1f}% | Mean AUC: {stability['mean_auc']:.2f} | Variance: {stability['var_auc']:.2f}")
+
 
       else:
           for i, ch in enumerate(self.chTable.values()):
@@ -559,6 +567,23 @@ class CCEPFilter(GridFilter):
 
         self._renderPlots(newData=False)
 
+  def compute_stability(self):
+    if not self.erna_buffer:
+      return None
+    
+    detections = [entry['detected'] for entry in self.erna_buffer]
+    aucs = [entry['auc'] for entry in self.erna_buffer]
+
+    detection_rate = sum(detections) / len(detections) # number of times erna was detected over the last 10 stimulations
+    mean_auc = np.mean(aucs)
+    var_auc = np.var(aucs)
+
+    return {
+        'detection_rate': detection_rate,
+        'mean_auc': mean_auc,
+        'var_auc': var_auc
+    }
+
   def filter_data(self, freq, amp, stim):
       # create query dictionary
       query = {}
@@ -584,27 +609,27 @@ class CCEPFilter(GridFilter):
       amp_trial_ids = {}
       stim_trial_ids = {}
 
-      def traverse(node, freq=None, amp=None, stim=None):
+      def traverse(node, freq=None, amp=None, stim=None, level=0):
+          # traverse in the order of the hierarchy: amplitude -> frequency -> stimulation channel
           if '_chunks' in node:
               for entry in node['_chunks']:
                   trial_id = entry.get('trial_id', 'N/A')
 
+                  if amp is not None:
+                    amp_trial_ids.setdefault(amp, set()).add(trial_id)
                   if freq is not None:
                       freq_trial_ids.setdefault(freq, set()).add(trial_id)
-                  if amp is not None:
-                      amp_trial_ids.setdefault(amp, set()).add(trial_id)
                   if stim is not None:
                       stim_trial_ids.setdefault(stim, set()).add(trial_id)
           else:
-              for f_key, f_node in node.items():
-                  if freq is None:
-                      traverse(f_node, freq=f_key, amp=amp, stim=stim)
-                  elif amp is None:
-                      traverse(f_node, freq=freq, amp=f_key, stim=stim)
-                  elif stim is None:
-                      traverse(f_node, freq=freq, amp=amp, stim=f_key)
-                  else:
-                      traverse(f_node, freq=freq, amp=amp, stim=stim)
+              key_name = metadata_keys[level]
+              for subkey, subnode in node.items():
+                  if key_name == 'amplitude':
+                      traverse(subnode, amp=subkey, freq=freq, stim=stim, level=level+1)
+                  elif key_name == 'frequency':
+                      traverse(subnode, amp=amp, freq=subkey, stim=stim, level=level+1)
+                  elif key_name == 'stim_channel':
+                      traverse(subnode, amp=amp, freq=freq, stim=subkey, level=level+1)
 
       traverse(root)
 
@@ -764,9 +789,9 @@ class CCEPFilter(GridFilter):
                 else:
                     traverse(subnode, freq=freq, amp=amp, stim=stim)
 
-    traverse(root)  # assumes you imported root from nested_defaultdict_store
+    traverse(root)
 
-    print("==================================\n")
+    print("================================\n")
 
 class TableRow():
   class TableItem(QtWidgets.QTableWidgetItem):
