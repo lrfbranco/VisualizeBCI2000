@@ -129,13 +129,44 @@ class TestBooleanParams(ptree.parameterTypes.GroupParameter):
     return self.filterStim
 
   def viewDictClicked(self):
-      self.p.view_ERNA_dict()
+    def parse_param(value):
+      if value == "All":
+          return None
+
+      try:
+          # if value is something like '130 (3)' or '1.5 (10)', split and parse first part
+          numeric_part = value.split()[0]
+          if '.' in numeric_part:
+              return float(numeric_part)
+          else:
+              return int(numeric_part)
+      except Exception as e:
+          print(f"parse_param error: {e} | value: {value}")
+          return value  # fallback, return original if parsing fails
+      
+    freq = parse_param(self.filterFreq.value())
+    amp = parse_param(self.filterAmp.value())
+    stim = parse_param(self.filterStim.value())
+    self.p.view_ERNA_dict(freq_filter=freq, amp_filter=amp, stim_filter=stim)
 
   def local_filter_data(self):
-    # collect filter values locally and send to filter_data function
-    freq = self.filterFreq.value()
-    amp = self.filterAmp.value()
-    stim = self.filterStim.value()
+    def parse_param(value):
+      if value == "All":
+          return None
+
+      try:
+          numeric_part = value.split()[0]
+          if '.' in numeric_part:
+              return float(numeric_part)
+          else:
+              return int(numeric_part)
+      except Exception as e:
+          print(f"parse_param error: {e} | value: {value}")
+          return value
+      
+    freq = parse_param(self.filterFreq.value())
+    amp = parse_param(self.filterAmp.value())
+    stim = parse_param(self.filterStim.value())
     self.p.filter_data(freq, amp, stim)
 
   def aChanged(self):
@@ -352,9 +383,9 @@ class CCEPFilter(GridFilter):
         self.epoch_count += 1
         self.epochDisplay.setValue(self.epoch_count)
         self.update_filter_dropdowns()
-        stability = self.compute_stability()
-        if stability:
-            print(f"ERNA Stability ➔ Detection rate: {stability['detection_rate']*100:.1f}% | Mean AUC: {stability['mean_auc']:.2f} | Variance: {stability['var_auc']:.2f}")
+        # stability = self.compute_stability()
+        # if stability:
+        #     print(f"ERNA Stability ➔ Detection rate: {stability['detection_rate']*100:.1f}% | Mean AUC: {stability['mean_auc']:.2f} | Variance: {stability['var_auc']:.2f}")
 
 
       else:
@@ -596,8 +627,9 @@ class CCEPFilter(GridFilter):
       
       # retrieve matching data
       results = get_partial(query)
+
       if results:
-          data_chunk = results[0]['data']
+          print(f"Number of Matching Results = {len(results)}")
       else:
           print("No matching results found.")
       #print(f"Filter results: {len(results)} entries found for query {query}")
@@ -767,7 +799,7 @@ class CCEPFilter(GridFilter):
         else:
           self.table.setRowHidden(r, False)
 
-  def view_ERNA_dict(self):
+  def view_ERNA_dict(self, freq_filter, amp_filter, stim_filter):
     print("\n==== Stored ERNA Dictionary ====")
 
     def traverse(node, freq=None, amp=None, stim=None):
@@ -777,13 +809,21 @@ class CCEPFilter(GridFilter):
                 trial_id = entry.get('trial_id')
                 trial_ids.add(trial_id)
             num_epochs = len(trial_ids)
-            print(f"Frequency: {freq} Hz | Amplitude: {amp} mA | Stim Channel: {stim} | Number of epochs: {num_epochs}")
+
+            # apply filters: if any filter is set and doesn't match, skip
+            if ((amp_filter is not None and amp != amp_filter)):
+                return
+            if (freq_filter is not None and freq != freq_filter):
+                return
+            if (stim_filter is not None and stim != stim_filter):
+                return
+            print(f"Amplitude: {amp} mA | Frequency: {freq} Hz | Stim Channel: {stim} | Number of epochs: {num_epochs}")
         else:
             for key, subnode in node.items():
-                if freq is None:
-                    traverse(subnode, freq=key, amp=amp, stim=stim)
-                elif amp is None:
+                if amp is None:
                     traverse(subnode, freq=freq, amp=key, stim=stim)
+                elif freq is None:
+                    traverse(subnode, freq=key, amp=amp, stim=stim)
                 elif stim is None:
                     traverse(subnode, freq=freq, amp=amp, stim=key)
                 else:
