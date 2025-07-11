@@ -11,6 +11,7 @@ from enum import Enum
 from scipy.signal import find_peaks
 from math import ceil
 from nested_defaultdict_store import add_chunk, get_group, get_partial
+from nested_defaultdict_store import root
 from pyqtgraph.parametertree import Parameter
 
 backgroundColor = (14, 14, 16)
@@ -170,8 +171,6 @@ class CCEPFilter(GridFilter):
     super().__init__(area, bciPath, stream)
     self.aucThresh = 0
     self.numTrigs = 0
-
-    self.previous_ERNA = {}
 
   def publish(self):
     super().publish()
@@ -341,19 +340,10 @@ class CCEPFilter(GridFilter):
         stim_channel = fake_meta['stim_channel']
         key = (frequency, amplitude, stim_channel)
 
-        # Process all channels (but don't append each to previous_ERNA)
+        # process all channels
         for i, ch in enumerate(self.chTable.values()):
             ch.chunkData(data[i], peaks, avgPlots)
             add_chunk(ch.data.copy(), fake_meta)
-
-        # Only append ONCE per stimulation event
-        if key not in self.previous_ERNA:
-            self.previous_ERNA[key] = []
-
-        self.previous_ERNA[key].append({
-            'trial_id': self.epoch_count,
-            'channels': [ch.data.copy() for ch in self.chTable.values()]
-        })
 
         self.epoch_count += 1
         self.epochDisplay.setValue(self.epoch_count)
@@ -588,41 +578,47 @@ class CCEPFilter(GridFilter):
       #print(f"Filter results: {len(results)} entries found for query {query}")
   
   def update_filter_dropdowns(self):
-    test_params = self.p.child('General Options')
+      test_params = self.p.child('General Options')
 
-    freq_trial_ids = {}
-    amp_trial_ids = {}
-    stim_trial_ids = {}
+      freq_trial_ids = {}
+      amp_trial_ids = {}
+      stim_trial_ids = {}
 
-    for key, entries in self.previous_ERNA.items():
-      freq, amp, stim = key
-      for entry in entries:
-          trial_id = entry['trial_id']
+      def traverse(node, freq=None, amp=None, stim=None):
+          if '_chunks' in node:
+              for entry in node['_chunks']:
+                  trial_id = entry.get('trial_id', 'N/A')
 
-          if freq not in freq_trial_ids:
-              freq_trial_ids[freq] = set()
-          freq_trial_ids[freq].add(trial_id)
+                  if freq is not None:
+                      freq_trial_ids.setdefault(freq, set()).add(trial_id)
+                  if amp is not None:
+                      amp_trial_ids.setdefault(amp, set()).add(trial_id)
+                  if stim is not None:
+                      stim_trial_ids.setdefault(stim, set()).add(trial_id)
+          else:
+              for f_key, f_node in node.items():
+                  if freq is None:
+                      traverse(f_node, freq=f_key, amp=amp, stim=stim)
+                  elif amp is None:
+                      traverse(f_node, freq=freq, amp=f_key, stim=stim)
+                  elif stim is None:
+                      traverse(f_node, freq=freq, amp=amp, stim=f_key)
+                  else:
+                      traverse(f_node, freq=freq, amp=amp, stim=stim)
 
-          if amp not in amp_trial_ids:
-              amp_trial_ids[amp] = set()
-          amp_trial_ids[amp].add(trial_id)
+      traverse(root)
 
-          if stim not in stim_trial_ids:
-              stim_trial_ids[stim] = set()
-          stim_trial_ids[stim].add(trial_id)
+      freq_options = ['All'] + [f"{int(freq)} ({len(ids)})" for freq, ids in freq_trial_ids.items()]
+      amp_options = ['All'] + [f"{amp} ({len(ids)})" for amp, ids in amp_trial_ids.items()]
+      stim_options = ['All'] + [f"{stim} ({len(ids)})" for stim, ids in stim_trial_ids.items()]
 
-    freq_options = ['All'] + [f"{int(freq)} ({len(ids)})" for freq, ids in freq_trial_ids.items()]
-    amp_options = ['All'] + [f"{amp} ({len(ids)})" for amp, ids in amp_trial_ids.items()]
-    stim_options = ['All'] + [f"{stim} ({len(ids)})" for stim, ids in stim_trial_ids.items()]
+      freq_param = test_params.getFilterFreq()
+      amp_param = test_params.getFilterAmp()
+      stim_param = test_params.getFilterStim()
 
-
-    freq_param = test_params.getFilterFreq()
-    amp_param = test_params.getFilterAmp()
-    stim_param = test_params.getFilterStim()
-
-    freq_param.setLimits(freq_options)
-    amp_param.setLimits(amp_options)
-    stim_param.setLimits(stim_options)
+      freq_param.setLimits(freq_options)
+      amp_param.setLimits(amp_options)
+      stim_param.setLimits(stim_options)
 
   def setSaveFigs(self, state):
     self._saveFigs = state
@@ -747,11 +743,30 @@ class CCEPFilter(GridFilter):
           self.table.setRowHidden(r, False)
 
   def view_ERNA_dict(self):
-      print("\n==== Previous ERNA Dictionary ====")
-      for key, chunks in self.previous_ERNA.items():
-          freq, amp, stim = key
-          print(f"Frequency: {int(freq)} Hz | Amplitude: {float(amp)} mA | Stim Channel: {int(stim)} | Number of epochs: {len(chunks)}")
-      print("==================================\n")
+    print("\n==== Stored ERNA Dictionary ====")
+
+    def traverse(node, freq=None, amp=None, stim=None):
+        if '_chunks' in node:
+            trial_ids = set()
+            for entry in node['_chunks']:
+                trial_id = entry.get('trial_id')
+                trial_ids.add(trial_id)
+            num_epochs = len(trial_ids)
+            print(f"Frequency: {freq} Hz | Amplitude: {amp} mA | Stim Channel: {stim} | Number of epochs: {num_epochs}")
+        else:
+            for key, subnode in node.items():
+                if freq is None:
+                    traverse(subnode, freq=key, amp=amp, stim=stim)
+                elif amp is None:
+                    traverse(subnode, freq=freq, amp=key, stim=stim)
+                elif stim is None:
+                    traverse(subnode, freq=freq, amp=amp, stim=key)
+                else:
+                    traverse(subnode, freq=freq, amp=amp, stim=stim)
+
+    traverse(root)  # assumes you imported root from nested_defaultdict_store
+
+    print("==================================\n")
 
 class TableRow():
   class TableItem(QtWidgets.QTableWidgetItem):
