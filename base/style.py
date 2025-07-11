@@ -167,4 +167,9 @@ QTableCornerButton::section {{
     background-color: #505050;
     color: #fff;
 }}
+QComboBox {{
+    font-size: 16px;
+    color: white;
+    background-color: #606060;
+}}
 """)

@@ -328,38 +328,36 @@ class CCEPFilter(GridFilter):
       #compute and chunk data
       avgPlots = self.p.child('General Options')['Average CCEPS']
       if chunk:
-          # generate metadata only ONCE per stimulation event
-          fake_meta = {
-              'amplitude': np.random.choice([0.5, 1.0, 1.5]),
-              'frequency': np.random.choice([100, 130, 160]),
-              'stim_channel': np.random.choice(list(range(1,17))),
-              'trial_id': self.epoch_count
-          }
+        # Generate metadata ONCE per stimulation event
+        fake_meta = {
+            'amplitude': np.random.choice([0.5, 1.0, 1.5]),
+            'frequency': np.random.choice([100, 130, 160]),
+            'stim_channel': np.random.choice(list(range(1,17))),
+            'trial_id': self.epoch_count
+        }
 
-          frequency = fake_meta['frequency']
-          amplitude = fake_meta['amplitude']
-          stim_channel = fake_meta['stim_channel']
-          key = (frequency, amplitude, stim_channel)
+        frequency = fake_meta['frequency']
+        amplitude = fake_meta['amplitude']
+        stim_channel = fake_meta['stim_channel']
+        key = (frequency, amplitude, stim_channel)
 
-          # loop through each channel
-          for i, ch in enumerate(self.chTable.values()):
-              ch.chunkData(data[i], peaks, avgPlots)  # process data per channel
+        # Process all channels (but don't append each to previous_ERNA)
+        for i, ch in enumerate(self.chTable.values()):
+            ch.chunkData(data[i], peaks, avgPlots)
+            add_chunk(ch.data.copy(), fake_meta)
 
-              add_chunk(ch.data.copy(), fake_meta)
-              if key not in self.previous_ERNA:
-                  self.previous_ERNA[key] = []
+        # Only append ONCE per stimulation event
+        if key not in self.previous_ERNA:
+            self.previous_ERNA[key] = []
 
-              self.previous_ERNA[key].append({
-                  'data': ch.data.copy(),
-                  'trial_id': self.epoch_count
-              })
-          self.epoch_count += 1
-          self.epochDisplay.setValue(self.epoch_count)
-          self.update_filter_dropdowns()
+        self.previous_ERNA[key].append({
+            'trial_id': self.epoch_count,
+            'channels': [ch.data.copy() for ch in self.chTable.values()]
+        })
 
-          test_query = {'frequency': fake_meta['frequency']}
-          results = get_partial(test_query)
-          # print(f"Retrieved {len(results)} entries for frequency {fake_meta['frequency']}")
+        self.epoch_count += 1
+        self.epochDisplay.setValue(self.epoch_count)
+        self.update_filter_dropdowns()
 
       else:
           for i, ch in enumerate(self.chTable.values()):
@@ -749,10 +747,11 @@ class CCEPFilter(GridFilter):
           self.table.setRowHidden(r, False)
 
   def view_ERNA_dict(self):
-    print("\n==== Previous ERNA Dictionary ====")
-    for key, chunks in self.previous_ERNA.items():
-        print(f"Key: {key} | Number of epochs: {len(chunks)}")
-    print("==================================\n")
+      print("\n==== Previous ERNA Dictionary ====")
+      for key, chunks in self.previous_ERNA.items():
+          freq, amp, stim = key
+          print(f"Frequency: {int(freq)} Hz | Amplitude: {float(amp)} mA | Stim Channel: {int(stim)} | Number of epochs: {len(chunks)}")
+      print("==================================\n")
 
 class TableRow():
   class TableItem(QtWidgets.QTableWidgetItem):
@@ -947,7 +946,6 @@ class CCEPCalc():
       normData = ccepData - np.mean(ccepData)
       self.auc = np.trapz(abs(normData))/1e3
     else:
-      print(f"[WARNING] Empty ccepData for trial_id {self.epoch_count}. Skipping AUC computation.")
       self.auc = 0
     
 
