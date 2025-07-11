@@ -20,7 +20,7 @@ def add_chunk(data, meta):
     node = root
     for k in metadata_keys:
         node = node[meta[k]]
-    entry = {'data': data, 'timestamp': meta['timestamp'], 'trial_id': meta.get('trial_id')}    # sample metadata that comes with actual data
+    entry = {'data': data, 'trial_id': meta.get('trial_id')}    # sample metadata that comes with actual data
     node.setdefault('_chunks', []).append(entry)
 
 # retrieve all data chunks that match full metadata query

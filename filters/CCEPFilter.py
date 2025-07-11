@@ -118,6 +118,14 @@ class TestBooleanParams(ptree.parameterTypes.GroupParameter):
 
     self.filterButton.sigActivated.connect(self.local_filter_data)  # connect button to filter function
 
+  # maybe these can be removed for redundancy with local_filter_data ???
+  def getFilterFreq(self):
+    return self.filterFreq
+  def getFilterAmp(self):
+    return self.filterAmp
+  def getFilterStim(self):
+    return self.filterStim
+
   def viewDictClicked(self):
       self.p.view_ERNA_dict()
 
@@ -221,6 +229,21 @@ class CCEPFilter(GridFilter):
     self.epoch_count = 0
     self.epochDisplay.setValue(self.epoch_count)    # set epoch count to zero upon restarting GUI
 
+    # reset filter dropdowns to be empty upon restarting GUI
+    # test_params = self.p.child('General Options')
+    # freq_param = test_params.getFilterFreq()
+    # amp_param = test_params.getFilterAmp()
+    # stim_param = test_params.getFilterStim()
+    # freq_defaults = ['All']
+    # amp_defaults = ['All']
+    # stim_defaults = ['All']
+    # freq_param.setLimits(freq_defaults)
+    # amp_param.setLimits(amp_defaults)
+    # stim_param.setLimits(stim_defaults)
+    # freq_param.setValue('All')
+    # amp_param.setValue('All')
+    # stim_param.setValue('All')
+
   def saveSettings(self):
     super().saveSettings()
 
@@ -304,18 +327,13 @@ class CCEPFilter(GridFilter):
       
       #compute and chunk data
       avgPlots = self.p.child('General Options')['Average CCEPS']
-      for i, ch in enumerate(self.chTable.values()):
-        if chunk:
-          # print("in the if statement")
-          ch.chunkData(data[i], peaks, avgPlots) #chunks and computes (processes); splits data into segments around detected peaks
-          
-          # hardcode fake metadata
+      if chunk:
+          # generate metadata only ONCE per stimulation event
           fake_meta = {
               'amplitude': np.random.choice([0.5, 1.0, 1.5]),
               'frequency': np.random.choice([100, 130, 160]),
               'stim_channel': np.random.choice(list(range(1,17))),
-              'timestamp': 2.0,  # arbitrary
-              'trial_id': np.random.randint(1, 10)
+              'trial_id': self.epoch_count
           }
 
           frequency = fake_meta['frequency']
@@ -323,26 +341,32 @@ class CCEPFilter(GridFilter):
           stim_channel = fake_meta['stim_channel']
           key = (frequency, amplitude, stim_channel)
 
-          # add processed data chunk to nested storage
-          add_chunk(ch.data.copy(), fake_meta)
-          # print(f"Added chunk with metadata: {fake_meta}")
+          # loop through each channel
+          for i, ch in enumerate(self.chTable.values()):
+              ch.chunkData(data[i], peaks, avgPlots)  # process data per channel
 
-          # add chunk to erna dictionary
-          if key not in self.previous_ERNA:
-              self.previous_ERNA[key] = []
-          self.previous_ERNA[key].append(ch.data.copy())
+              add_chunk(ch.data.copy(), fake_meta)
+              if key not in self.previous_ERNA:
+                  self.previous_ERNA[key] = []
+
+              self.previous_ERNA[key].append({
+                  'data': ch.data.copy(),
+                  'trial_id': self.epoch_count
+              })
+          self.epoch_count += 1
+          self.epochDisplay.setValue(self.epoch_count)
+          self.update_filter_dropdowns()
 
           test_query = {'frequency': fake_meta['frequency']}
           results = get_partial(test_query)
           # print(f"Retrieved {len(results)} entries for frequency {fake_meta['frequency']}")
 
-        else:
-          ch.computeData(data[i], avgPlots) #compute data
-          #print("we are in the else")
-        aocs.append(ch.auc)
-      self.epoch_count += 1
-      self.epochDisplay.setValue(self.epoch_count)
-      
+      else:
+          for i, ch in enumerate(self.chTable.values()):
+              ch.computeData(data[i], avgPlots)  # compute data
+              # print("we are in the else")
+      for i, ch in enumerate(self.chTable.values()):
+          aocs.append(ch.auc)      
       #send processed data
       self.dataProcessedSignal.emit(aocs)
 
@@ -561,10 +585,46 @@ class CCEPFilter(GridFilter):
       results = get_partial(query)
       if results:
           data_chunk = results[0]['data']
-          # plot this data_chunk on one of your existing CCEP plots or in a debug plot window
       else:
           print("No matching results found.")
       #print(f"Filter results: {len(results)} entries found for query {query}")
+  
+  def update_filter_dropdowns(self):
+    test_params = self.p.child('General Options')
+
+    freq_trial_ids = {}
+    amp_trial_ids = {}
+    stim_trial_ids = {}
+
+    for key, entries in self.previous_ERNA.items():
+      freq, amp, stim = key
+      for entry in entries:
+          trial_id = entry['trial_id']
+
+          if freq not in freq_trial_ids:
+              freq_trial_ids[freq] = set()
+          freq_trial_ids[freq].add(trial_id)
+
+          if amp not in amp_trial_ids:
+              amp_trial_ids[amp] = set()
+          amp_trial_ids[amp].add(trial_id)
+
+          if stim not in stim_trial_ids:
+              stim_trial_ids[stim] = set()
+          stim_trial_ids[stim].add(trial_id)
+
+    freq_options = ['All'] + [f"{int(freq)} ({len(ids)})" for freq, ids in freq_trial_ids.items()]
+    amp_options = ['All'] + [f"{amp} ({len(ids)})" for amp, ids in amp_trial_ids.items()]
+    stim_options = ['All'] + [f"{stim} ({len(ids)})" for stim, ids in stim_trial_ids.items()]
+
+
+    freq_param = test_params.getFilterFreq()
+    amp_param = test_params.getFilterAmp()
+    stim_param = test_params.getFilterStim()
+
+    freq_param.setLimits(freq_options)
+    amp_param.setLimits(amp_options)
+    stim_param.setLimits(stim_options)
 
   def setSaveFigs(self, state):
     self._saveFigs = state
@@ -887,6 +947,7 @@ class CCEPCalc():
       normData = ccepData - np.mean(ccepData)
       self.auc = np.trapz(abs(normData))/1e3
     else:
+      print(f"[WARNING] Empty ccepData for trial_id {self.epoch_count}. Skipping AUC computation.")
       self.auc = 0
     
 
