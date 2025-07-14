@@ -14,6 +14,7 @@ from nested_defaultdict_store import add_chunk, get_group, get_partial, to_py_ty
 from nested_defaultdict_store import root, metadata_keys
 from pyqtgraph.parametertree import Parameter
 from collections import deque # used for rolling buffer
+import matplotlib.pyplot as plt # for plot testing
 
 backgroundColor = (14, 14, 16)
 highlightColor = (60, 60, 40)
@@ -311,17 +312,29 @@ class CCEPFilter(GridFilter):
               print(f"[WARN] Bit position {b} exceeds available channels ({len(self.chNames)})") #append ch name
 
   def plot_average_erna(self, freq_filter, amp_filter, stim_filter):
-    print(f"Filter query → freq: {freq_filter}, amp: {amp_filter}, stim: {stim_filter}")
-    print(f"Types → freq: {type(freq_filter)}, amp: {type(amp_filter)}, stim: {type(stim_filter)}")
     results = self.filter_data(freq_filter, amp_filter, stim_filter)
-    print(results)
 
     if not results:
       print("No matching epochs found.")
       return
     
     data_list = [chunk['data'] for chunk in results]
-    print(data_list)
+    data_array = np.stack(data_list, axis=0) # stack all data chunks into a 2d numpy array
+    avg_signal = np.mean(data_array, axis=0) # compute avg across epochs
+    stderr = np.std(data_array, axis=0) / np.sqrt(data_array.shape[0])
+
+    time_axis = np.linspace(-self.baselineLength, self.ccepLength, data_array.shape[1])
+
+    plt.figure(figsize=(10, 5))
+    plt.plot(time_axis, avg_signal, label="Average ERNA", color='blue')
+    plt.fill_between(time_axis, avg_signal - stderr, avg_signal + stderr, color='blue', alpha=0.3, label="± SEM")
+    plt.xlabel("Time (ms)")
+    plt.ylabel("Amplitude (µV)")
+    plt.title("Average ERNA")
+    plt.legend()
+    plt.grid(True)
+    plt.tight_layout()
+    plt.show()
 
 
   def plot(self, data):
@@ -646,47 +659,53 @@ class CCEPFilter(GridFilter):
       #print(f"Filter results: {len(results)} entries found for query {query}")
   
   def update_filter_dropdowns(self):
-      test_params = self.p.child('General Options')
+    test_params = self.p.child('General Options')
 
-      freq_trial_ids = {}
-      amp_trial_ids = {}
-      stim_trial_ids = {}
+    freq_param = test_params.getFilterFreq()
+    amp_param = test_params.getFilterAmp()
+    stim_param = test_params.getFilterStim()
 
-      def traverse(node, freq=None, amp=None, stim=None, level=0):
-          # traverse in the order of the hierarchy: amplitude -> frequency -> stimulation channel
-          if '_chunks' in node:
-              for entry in node['_chunks']:
-                  trial_id = entry.get('trial_id', 'N/A')
+    current_freq = parse_param(freq_param.value())
+    current_amp = parse_param(amp_param.value())
+    current_stim = parse_param(stim_param.value())
 
-                  if amp is not None:
-                    amp_trial_ids.setdefault(amp, set()).add(trial_id)
-                  if freq is not None:
-                      freq_trial_ids.setdefault(freq, set()).add(trial_id)
-                  if stim is not None:
-                      stim_trial_ids.setdefault(stim, set()).add(trial_id)
-          else:
-              key_name = metadata_keys[level]
-              for subkey, subnode in node.items():
-                  if key_name == 'amplitude':
-                      traverse(subnode, amp=subkey, freq=freq, stim=stim, level=level+1)
-                  elif key_name == 'frequency':
-                      traverse(subnode, amp=amp, freq=subkey, stim=stim, level=level+1)
-                  elif key_name == 'stim_channel':
-                      traverse(subnode, amp=amp, freq=freq, stim=subkey, level=level+1)
+    freq_counts = {}
+    amp_counts = {}
+    stim_counts = {}
 
-      traverse(root)
+    for freq in [100, 130, 160]:
+        results = get_partial({'frequency': freq})
+        if results:
+            freq_counts[freq] = len(set(entry['trial_id'] for entry in results))
 
-      freq_options = ['All'] + [f"{int(freq)} ({len(ids)})" for freq, ids in freq_trial_ids.items()]
-      amp_options = ['All'] + [f"{amp} ({len(ids)})" for amp, ids in amp_trial_ids.items()]
-      stim_options = ['All'] + [f"{stim} ({len(ids)})" for stim, ids in stim_trial_ids.items()]
+    for amp in [0.5, 1.0, 1.5]:
+        results = get_partial({'amplitude': amp})
+        if results:
+            amp_counts[amp] = len(set(entry['trial_id'] for entry in results))
 
-      freq_param = test_params.getFilterFreq()
-      amp_param = test_params.getFilterAmp()
-      stim_param = test_params.getFilterStim()
+    for stim in range(1, 17):
+        results = get_partial({'stim_channel': stim})
+        if results:
+            stim_counts[stim] = len(set(entry['trial_id'] for entry in results))
 
-      freq_param.setLimits(freq_options)
-      amp_param.setLimits(amp_options)
-      stim_param.setLimits(stim_options)
+    freq_options = ['All'] + [f"{freq} ({count})" for freq, count in freq_counts.items()]
+    amp_options = ['All'] + [f"{amp} ({count})" for amp, count in amp_counts.items()]
+    stim_options = ['All'] + [f"{stim} ({count})" for stim, count in stim_counts.items()]
+
+    freq_param.setLimits(freq_options)
+    amp_param.setLimits(amp_options)
+    stim_param.setLimits(stim_options)
+
+    def restore_selection(param, current_val, options):
+        for opt in options:
+            if parse_param(opt) == current_val:
+                param.setValue(opt)
+                return
+        param.setValue('All')
+
+    restore_selection(freq_param, current_freq, freq_options)
+    restore_selection(amp_param, current_amp, amp_options)
+    restore_selection(stim_param, current_stim, stim_options)
 
   def setSaveFigs(self, state):
     self._saveFigs = state
