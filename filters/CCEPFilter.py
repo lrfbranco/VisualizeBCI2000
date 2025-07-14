@@ -40,6 +40,7 @@ class Column(Enum):
   Electrode = 1
   Sig = 2
   AUC = 3
+  RMS = 4
 
 #taken from pyqtgraph example
 ## test add/remove
@@ -324,13 +325,14 @@ class CCEPFilter(GridFilter):
     stderr = np.std(data_array, axis=0) / np.sqrt(data_array.shape[0])
 
     time_axis = np.linspace(-self.baselineLength, self.ccepLength, data_array.shape[1])
+    num_epochs = data_array.shape[0] // 16    # is this correct ???
 
     plt.figure(figsize=(10, 5))
     plt.plot(time_axis, avg_signal, label="Average ERNA", color='blue')
     plt.fill_between(time_axis, avg_signal - stderr, avg_signal + stderr, color='blue', alpha=0.3, label="± SEM")
     plt.xlabel("Time (ms)")
     plt.ylabel("Amplitude (µV)")
-    plt.title("Average ERNA")
+    plt.title(f"Average ERNA ({num_epochs} epochs)")  # maybe update title to reflect selected conditions?
     plt.legend()
     plt.grid(True)
     plt.tight_layout()
@@ -393,6 +395,7 @@ class CCEPFilter(GridFilter):
         # process all channels
         for i, ch in enumerate(self.chTable.values()):
             ch.chunkData(data[i], peaks, avgPlots)
+            ch.computeFeatures()
             add_chunk(ch.data.copy(), fake_meta)
 
             is_detected = ch.auc > 1 # arbitrary threshold used for testing
@@ -412,6 +415,7 @@ class CCEPFilter(GridFilter):
       else:
           for i, ch in enumerate(self.chTable.values()):
               ch.computeData(data[i], avgPlots)  # compute data
+              ch.computeFeatures()
               # print("we are in the else")
       for i, ch in enumerate(self.chTable.values()):
           aocs.append(ch.auc)      
@@ -891,11 +895,13 @@ class TableRow():
     s = self.TableItem(self)
     a = self.TableItem(self)
     e = self.TableItem(self, self.elName)
+    r = self.TableItem(self)
 
     table.setItem(self.oldRow, Column.Name.value, self.n)
     table.setItem(self.oldRow, Column.Electrode.value, e)
     table.setItem(self.oldRow, Column.Sig.value, s)
     table.setItem(self.oldRow, Column.AUC.value, a)
+    table.setItem(self.oldRow, Column.RMS.value, r)
 
 class CCEPPlot(pg.PlotItem):
   def __init__(self, parent, title, row):
@@ -1005,6 +1011,7 @@ class CCEPCalc():
     self.selected = False
     self.database = []
     self.auc = 0
+    self.rms = 0
     self.data = np.zeros(self.p.elements)
 
   def getActiveData(self, data):
@@ -1024,6 +1031,7 @@ class CCEPCalc():
     r = self.p.table.row(self.tableItem) #find new row we are at
     self.p.table.item(r,Column.Sig.value).setData(QtCore.Qt.DisplayRole, int(t))
     self.p.table.item(r,Column.AUC.value).setData(QtCore.Qt.DisplayRole, int(self.auc))
+    self.p.table.item(r,Column.RMS.value).setData(QtCore.Qt.DisplayRole, round(self.rms))
     self.significant = t
 
     if self.significant and self.tableItem.background() != empColor:
@@ -1076,4 +1084,14 @@ class CCEPCalc():
           data = np.pad(data, (0, pad_width), mode='constant')
 
       self.computeData(data, avgPlots)
+
+  def computeFeatures(self):
+    time_axis = self.p.x  # time axis in ms
+    mask = (time_axis >= 2) & (time_axis <= 30) # skip 2ms to exclude stimulation artifact
+    window = self.data[mask]
+
+    if window.size == 0:
+        self.rms = 0
+    else:
+        self.rms = np.sqrt(np.mean(window ** 2))
 
