@@ -6,7 +6,7 @@ import numpy as np
 
 # define nested defaultdict tree: 
 # amplitude -> frequency -> stim_channel -> list of data entries (example hierarchy)
-metadata_keys = ['amplitude', 'frequency', 'stim_channel']
+metadata_keys = ['frequency', 'amplitude', 'stim_channel']
 
 # define innermost level (list of data entries)
 # recursive definition allows for infinite defaultdicts, any missing key automatically creates another defaultdict of the same type
@@ -15,11 +15,27 @@ def tree():
 
 root = tree() # top-level storage (amplitude), leaf is list
 
+def to_py_type(x):
+    if isinstance(x, (np.integer, np.floating)):
+        return x.item()
+    return x
+
 # insert grouped data entries (call right after data is ready for storage (preprocessed))
 def add_chunk(data, meta):
-    node = root
-    for k in metadata_keys:
-        node = node[meta[k]]
+    f = to_py_type(meta['frequency'])
+    a = to_py_type(meta['amplitude'])
+    s = to_py_type(meta['stim_channel'])
+
+    if f not in root:
+        root[f] = {}
+    if a not in root[f]:
+        root[f][a] = {}
+    if s not in root[f][a]:
+        root[f][a][s] = {'_chunks': []}
+
+    node = root[f][a][s]
+    # for k in metadata_keys:
+    #     node = node[meta[k]]
     entry = {'data': data, 'trial_id': meta.get('trial_id')}    # sample metadata that comes with actual data
     node.setdefault('_chunks', []).append(entry)
 
@@ -43,10 +59,15 @@ def get_partial(meta_query, node=None, level=0):
 
     key = metadata_keys[level]
 
-    if key in meta_query:
+    if key in meta_query and meta_query[key] is not None:
+        query_val = meta_query[key]
         # if current key is in query, descend into that subkey
-        subnode = node.get(meta_query[key], {})
-        results.extend(get_partial(meta_query, subnode, level + 1))
+        for subkey in node:
+            if subkey == '_chunks':
+                continue
+            if subkey == query_val:
+                subnode = node[subkey]
+                results.extend(get_partial(meta_query, subnode, level + 1))
     else:
         # if current key is not in query, descend into all subkeys at this level
         for subkey in node:

@@ -10,7 +10,7 @@ from base.SharedVisualization import saveFigure
 from enum import Enum
 from scipy.signal import find_peaks
 from math import ceil
-from nested_defaultdict_store import add_chunk, get_group, get_partial
+from nested_defaultdict_store import add_chunk, get_group, get_partial, to_py_type
 from nested_defaultdict_store import root, metadata_keys
 from pyqtgraph.parametertree import Parameter
 from collections import deque # used for rolling buffer
@@ -18,6 +18,21 @@ from collections import deque # used for rolling buffer
 backgroundColor = (14, 14, 16)
 highlightColor = (60, 60, 40)
 highZValue = 1000
+
+def parse_param(value):
+      if value == "All":
+          return None
+
+      try:
+          # if value is something like '130 (3)' or '1.5 (10)', split and parse first part
+          numeric_part = value.split()[0]
+          if '.' in numeric_part:
+              return float(numeric_part)
+          else:
+              return int(numeric_part)
+      except Exception as e:
+          print(f"parse_param error: {e} | value: {value}")
+          return value  # fallback, return original if parsing fails
 
 class Column(Enum):
   Name = 0
@@ -109,7 +124,8 @@ class TestBooleanParams(ptree.parameterTypes.GroupParameter):
         {'name': 'Frequency', 'type': 'list', 'limits': ['All', 100, 130, 160], 'value': 'All'},
         {'name': 'Amplitude', 'type': 'list', 'limits': ['All', 0.5, 1.0, 1.5], 'value': 'All'},
         {'name': 'Stimulation Channel', 'type': 'list', 'limits': ['All'] + [str(i) for i in range(1,17)], 'value': 'All'},
-        {'name': 'Filter Data', 'type': 'action'}
+        {'name': 'Filter Data', 'type': 'action'},
+        {'name': 'Plot Average ERNA', 'type': 'action'}
     ])
     self.addChild(param)
 
@@ -117,8 +133,10 @@ class TestBooleanParams(ptree.parameterTypes.GroupParameter):
     self.filterAmp = self.param('Filters', 'Amplitude')
     self.filterStim = self.param('Filters', 'Stimulation Channel')
     self.filterButton = self.param('Filters', 'Filter Data')
+    self.plotAvg = self.param('Filters', 'Plot Average ERNA')
 
     self.filterButton.sigActivated.connect(self.local_filter_data)  # connect button to filter function
+    self.plotAvg.sigActivated.connect(self.plot_avg_clicked)
 
   # maybe these can be removed for redundancy with local_filter_data ???
   def getFilterFreq(self):
@@ -127,47 +145,24 @@ class TestBooleanParams(ptree.parameterTypes.GroupParameter):
     return self.filterAmp
   def getFilterStim(self):
     return self.filterStim
-
+  
   def viewDictClicked(self):
-    def parse_param(value):
-      if value == "All":
-          return None
-
-      try:
-          # if value is something like '130 (3)' or '1.5 (10)', split and parse first part
-          numeric_part = value.split()[0]
-          if '.' in numeric_part:
-              return float(numeric_part)
-          else:
-              return int(numeric_part)
-      except Exception as e:
-          print(f"parse_param error: {e} | value: {value}")
-          return value  # fallback, return original if parsing fails
-      
     freq = parse_param(self.filterFreq.value())
     amp = parse_param(self.filterAmp.value())
     stim = parse_param(self.filterStim.value())
     self.p.view_ERNA_dict(freq_filter=freq, amp_filter=amp, stim_filter=stim)
 
   def local_filter_data(self):
-    def parse_param(value):
-      if value == "All":
-          return None
-
-      try:
-          numeric_part = value.split()[0]
-          if '.' in numeric_part:
-              return float(numeric_part)
-          else:
-              return int(numeric_part)
-      except Exception as e:
-          print(f"parse_param error: {e} | value: {value}")
-          return value
-      
     freq = parse_param(self.filterFreq.value())
     amp = parse_param(self.filterAmp.value())
     stim = parse_param(self.filterStim.value())
     self.p.filter_data(freq, amp, stim)
+  
+  def plot_avg_clicked(self):
+    freq = parse_param(self.filterFreq.value())
+    amp = parse_param(self.filterAmp.value())
+    stim = parse_param(self.filterStim.value())
+    self.p.plot_average_erna(freq_filter=freq, amp_filter=amp, stim_filter=stim)
 
   def aChanged(self):
     self.p.setSortChs(self.a.value())
@@ -315,11 +310,24 @@ class CCEPFilter(GridFilter):
             else:
               print(f"[WARN] Bit position {b} exceeds available channels ({len(self.chNames)})") #append ch name
 
-  
+  def plot_average_erna(self, freq_filter, amp_filter, stim_filter):
+    print(f"Filter query → freq: {freq_filter}, amp: {amp_filter}, stim: {stim_filter}")
+    print(f"Types → freq: {type(freq_filter)}, amp: {type(amp_filter)}, stim: {type(stim_filter)}")
+    results = self.filter_data(freq_filter, amp_filter, stim_filter)
+    print(results)
+
+    if not results:
+      print("No matching epochs found.")
+      return
+    
+    data_list = [chunk['data'] for chunk in results]
+    print(data_list)
+
+
   def plot(self, data):
     #if self.checkPlot():
     if self.numTrigs > 0:
-      print("plotting")
+      # print("plotting")
       self.numTrigs -= 1
 
       #process data
@@ -346,7 +354,7 @@ class CCEPFilter(GridFilter):
 
         peaks, properties = find_peaks(self.trigData, 1, distance=1)    # changed values for testing
         # print(self.trigData)
-        print(f"Found {len(peaks)} peaks")
+        # print(f"Found {len(peaks)} peaks") # TEMPORARILY DISABLE FOR TESTING
         if len(peaks) >= 1:   # our data has only one peak, so consider it
           chunk = True
         else:
@@ -625,6 +633,8 @@ class CCEPFilter(GridFilter):
       if stim != 'All':
           query['stim_channel'] = stim
       
+      print(f"\nFilter query → {query}")
+
       # retrieve matching data
       results = get_partial(query)
 
@@ -632,6 +642,7 @@ class CCEPFilter(GridFilter):
           print(f"Number of Matching Results = {len(results)}")
       else:
           print("No matching results found.")
+      return results
       #print(f"Filter results: {len(results)} entries found for query {query}")
   
   def update_filter_dropdowns(self):
