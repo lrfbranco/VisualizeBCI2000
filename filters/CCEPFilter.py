@@ -556,7 +556,7 @@ class CCEPFilter(GridFilter):
 
       positions = {}
 
-      if leftOn:
+      if leftOn and not rightOn:
         positions = {
           "Lv4_L":  (0, 1),
           "Lv3C_L": (1, 0),
@@ -568,7 +568,7 @@ class CCEPFilter(GridFilter):
           "Lv1_L":  (3, 1),
         }
       
-      if rightOn:
+      if rightOn and not leftOn:
         positions = {
           "Lv4_R":  (0, 1),
           "Lv3C_R": (1, 0),
@@ -579,6 +579,28 @@ class CCEPFilter(GridFilter):
           "Lv2B_R": (2, 2),
           "Lv1_R":  (3, 1),
         }
+      
+      if leftOn and rightOn:
+        positions = {
+          "Lv4_L":  (0, 1),
+          "Lv3C_L": (1, 0),
+          "Lv3A_L": (1, 1),
+          "Lv3B_L": (1, 2),
+          "Lv2C_L": (2, 0),
+          "Lv2A_L": (2, 1),
+          "Lv2B_L": (2, 2),
+          "Lv1_L":  (3, 1),
+
+          "Lv4_R":  (0, 5),
+          "Lv3C_R": (1, 4),
+          "Lv3A_R": (1, 5),
+          "Lv3B_R": (1, 6),
+          "Lv2C_R": (2, 4),
+          "Lv2A_R": (2, 5),
+          "Lv2B_R": (2, 6),
+          "Lv1_R":  (3, 5),
+        }
+         
 
       self.displayedPlots = {}  # initialize empty dictionary that will hold subset of current plots being displayed
       self.gridPlots.clear()
