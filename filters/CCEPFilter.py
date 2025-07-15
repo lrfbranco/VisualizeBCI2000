@@ -42,6 +42,7 @@ class Column(Enum):
   Sig = 2
   AUC = 3
   RMS = 4
+  P2P = 5
 
 #taken from pyqtgraph example
 ## test add/remove
@@ -574,6 +575,7 @@ class CCEPFilter(GridFilter):
           "Lv2B_L": (2, 2),
           "Lv1_L":  (3, 1),
         }
+        self.updateTableForDBSLayout()
       
       if rightOn and not leftOn:
         positions = {
@@ -586,6 +588,7 @@ class CCEPFilter(GridFilter):
           "Lv2B_R": (2, 2),
           "Lv1_R":  (3, 1),
         }
+        self.updateTableForDBSLayout()
       
       if leftOn and rightOn:
         positions = {
@@ -607,6 +610,8 @@ class CCEPFilter(GridFilter):
           "Lv2B_R": (2, 6),
           "Lv1_R":  (3, 5),
         }
+        for row in range(self.table.rowCount()):
+            self.table.setRowHidden(row, False)
          
 
       self.displayedPlots = {}  # initialize empty dictionary that will hold subset of current plots being displayed
@@ -628,6 +633,8 @@ class CCEPFilter(GridFilter):
     if self._dbsLayout and not state:  # if box is unchecked
         for ch in self.chTable.values():
             ch.totalChanged(False)  # reset flags
+        for row in range(self.table.rowCount()):
+            self.table.setRowHidden(row, False)
         self.table.sortItems(Column.Name.value, QtCore.Qt.DescendingOrder)
 
         self._dbsLayout = False
@@ -651,6 +658,23 @@ class CCEPFilter(GridFilter):
                         self.displayedPlots[chIdx] = chPlot
 
         self._renderPlots(newData=False)
+
+  def updateTableForDBSLayout(self):
+    leftOn = self.p.param('General Options', 'DBS Layout Left').value()
+    rightOn = self.p.param('General Options', 'DBS Layout Right').value()
+
+    for row in range(self.table.rowCount()):
+      ch_item = self.table.item(row, Column.Name.value)
+      if not ch_item:
+        continue
+      ch_name = ch_item.text()
+      is_left = ch_name.endswith('_L')
+      is_right = ch_name.endswith('_R')
+
+      visible = (
+        (leftOn and is_left) or (rightOn and is_right)
+      )
+      self.table.setRowHidden(row, not visible)
 
   def compute_stability(self):
     if not self.erna_buffer:
@@ -925,12 +949,14 @@ class TableRow():
     a = self.TableItem(self)
     e = self.TableItem(self, self.elName)
     r = self.TableItem(self)
+    p = self.TableItem(self)
 
     table.setItem(self.oldRow, Column.Name.value, self.n)
     table.setItem(self.oldRow, Column.Electrode.value, e)
     table.setItem(self.oldRow, Column.Sig.value, s)
     table.setItem(self.oldRow, Column.AUC.value, a)
     table.setItem(self.oldRow, Column.RMS.value, r)
+    table.setItem(self.oldRow, Column.P2P.value, p)
 
 class CCEPPlot(pg.PlotItem):
   def __init__(self, parent, title, row):
@@ -1041,6 +1067,7 @@ class CCEPCalc():
     self.database = []
     self.auc = 0
     self.rms = 0
+    self.p2p = 0
     self.data = np.zeros(self.p.elements)
 
   def getActiveData(self, data):
@@ -1061,6 +1088,7 @@ class CCEPCalc():
     self.p.table.item(r,Column.Sig.value).setData(QtCore.Qt.DisplayRole, int(t))
     self.p.table.item(r,Column.AUC.value).setData(QtCore.Qt.DisplayRole, int(self.auc))
     self.p.table.item(r,Column.RMS.value).setData(QtCore.Qt.DisplayRole, round(self.rms))
+    self.p.table.item(r,Column.P2P.value).setData(QtCore.Qt.DisplayRole, int(self.p2p))
     self.significant = t
 
     if self.significant and self.tableItem.background() != empColor:
@@ -1130,7 +1158,9 @@ class CCEPCalc():
 
     if window.size == 0:
         self.rms = 0
+        self.p2p = 0
     else:
         window_detrended = detrend(window, type='linear')
         self.rms = np.sqrt(np.mean(window_detrended ** 2))
+        self.p2p = np.max(window_detrended) - np.min(window_detrended)
 
