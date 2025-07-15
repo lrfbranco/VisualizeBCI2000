@@ -15,6 +15,7 @@ from nested_defaultdict_store import root, metadata_keys
 from pyqtgraph.parametertree import Parameter
 from collections import deque # used for rolling buffer
 import matplotlib.pyplot as plt # for plot testing
+from scipy.signal import detrend
 
 backgroundColor = (14, 14, 16)
 highlightColor = (60, 60, 40)
@@ -395,6 +396,9 @@ class CCEPFilter(GridFilter):
         # process all channels
         for i, ch in enumerate(self.chTable.values()):
             ch.chunkData(data[i], peaks, avgPlots)
+            last_peak_idx = peaks[-1]
+            last_peak_time = last_peak_idx / self.sr * 1000 # in ms
+            ch.last_peak_time = last_peak_time
             ch.computeFeatures()
             add_chunk(ch.data.copy(), fake_meta)
 
@@ -415,6 +419,9 @@ class CCEPFilter(GridFilter):
       else:
           for i, ch in enumerate(self.chTable.values()):
               ch.computeData(data[i], avgPlots)  # compute data
+              last_peak_idx = peaks[-1]
+              last_peak_time = last_peak_idx / self.sr * 1000 # in ms
+              ch.last_peak_time = last_peak_time
               ch.computeFeatures()
               # print("we are in the else")
       for i, ch in enumerate(self.chTable.values()):
@@ -1108,12 +1115,22 @@ class CCEPCalc():
       self.computeData(data, avgPlots)
 
   def computeFeatures(self):
+    if not hasattr (self, 'last_peak_time'):
+       self.rms = np.nan
+       return
+    
     time_axis = self.p.x  # time axis in ms
-    mask = (time_axis >= 2) & (time_axis <= 30) # skip 2ms to exclude stimulation artifact
-    window = self.data[mask]
+    signal = self.data # pre-processed signal
+
+    start_time = self.last_peak_time + 2
+    end_time = 30
+
+    mask = (time_axis >= start_time) & (time_axis <= end_time) # skip 2ms to exclude stimulation artifact
+    window = signal[mask]
 
     if window.size == 0:
         self.rms = 0
     else:
-        self.rms = np.sqrt(np.mean(window ** 2))
+        window_detrended = detrend(window, type='linear')
+        self.rms = np.sqrt(np.mean(window_detrended ** 2))
 
