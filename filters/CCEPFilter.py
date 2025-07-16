@@ -315,31 +315,60 @@ class CCEPFilter(GridFilter):
               print(f"[WARN] Bit position {b} exceeds available channels ({len(self.chNames)})") #append ch name
 
   def plot_average_erna(self, freq_filter, amp_filter, stim_filter):
-    results = self.filter_data(freq_filter, amp_filter, stim_filter)
+    """
+    For each channel:
+    1) pull out all stored epochs macthing parameters & channel name
+    2) compute mean and SEM across those epochs
+    3) plot in 4x4 layout (same as raw data layout)
+    """
 
+    results = self.filter_data(freq_filter, amp_filter, stim_filter)
     if not results:
       print("No matching epochs found.")
       return
-    
-    data_list = [chunk['data'] for chunk in results]
-    data_array = np.stack(data_list, axis=0) # stack all data chunks into a 2d numpy array
-    avg_signal = np.mean(data_array, axis=0) # compute avg across epochs
-    stderr = np.std(data_array, axis=0) / np.sqrt(data_array.shape[0])
 
-    time_axis = np.linspace(-self.baselineLength, self.ccepLength, data_array.shape[1])
-    num_epochs = data_array.shape[0] // 16    # is this correct ???
+    rows, cols = self.numRows, self.numColumns
+    fig, axes = plt.subplots(rows, cols, figsize=(cols*4, rows*3),
+                             sharex=True, sharey=True)
+    axes = np.atleast_2d(axes)
 
-    plt.figure(figsize=(10, 5))
-    plt.plot(time_axis, avg_signal, label="Average ERNA", color='blue')
-    plt.fill_between(time_axis, avg_signal - stderr, avg_signal + stderr, color='blue', alpha=0.3, label="± SEM")
-    plt.xlabel("Time (ms)")
-    plt.ylabel("Amplitude (µV)")
-    plt.title(f"Average ERNA ({num_epochs} epochs)")  # maybe update title to reflect selected conditions?
-    plt.legend()
-    plt.grid(True)
-    plt.tight_layout()
+    sample_count = results[0]['data'].shape[0]
+    time_axis = np.linspace(-self.baselineLength, self.ccepLength, sample_count)  # time for each captured epoch
+
+    for r in range(rows):
+        for c in range(cols):
+            ax = axes[r, c]
+            idx = r*cols + c
+            if idx >= len(self.chNames):
+                ax.set_visible(False)
+                continue
+
+            chName = self.chNames[idx]
+            ch_epochs = [chunk['data'] 
+                         for chunk in results 
+                         if chunk.get('channel') == chName]   # use stored metadata channel name
+            if not ch_epochs:
+                ax.set_visible(False)
+                continue
+
+            data_array = np.stack(ch_epochs, axis=0)
+            avg = data_array.mean(axis=0)
+            sem = data_array.std(axis=0) / np.sqrt(data_array.shape[0])
+
+            ax.plot(time_axis, avg, color='blue')
+            ax.fill_between(time_axis,
+                            avg - sem,
+                            avg + sem,
+                            alpha=0.3, color='blue')
+            ax.set_title(f"{chName}\n(n={data_array.shape[0]})")
+            ax.set_ylim(-1000, 1000)
+            ax.grid(True)
+            if r == rows-1:  ax.set_xlabel("Time (ms)")
+            if c == 0:       ax.set_ylabel("µV")
+
+    plt.tight_layout(rect=[0,0,1,0.95]) # reserve space at top of figure for title
+    plt.suptitle("Average ERNA by Channel", y=1.02, fontsize=16)
     plt.show()
-
 
   def plot(self, data):
     #if self.checkPlot():
@@ -401,7 +430,9 @@ class CCEPFilter(GridFilter):
             last_peak_time = last_peak_idx / self.sr * 1000 # in ms
             ch.last_peak_time = last_peak_time
             ch.computeFeatures()
-            add_chunk(ch.data.copy(), fake_meta)
+            meta = fake_meta.copy()
+            meta['channel'] = ch.title if hasattr(ch, 'title') else self.chNames[i]
+            add_chunk(ch.data.copy(), meta)
 
             is_detected = ch.auc > 1 # arbitrary threshold used for testing
             self.erna_buffer.append({
