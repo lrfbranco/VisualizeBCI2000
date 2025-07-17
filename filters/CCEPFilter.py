@@ -130,7 +130,6 @@ class TestBooleanParams(ptree.parameterTypes.GroupParameter):
         {'name': 'Stimulation Channel', 'type': 'list', 'limits': ['All'] + [str(i) for i in range(1,17)], 'value': 'All'},
         {'name': 'Filter Data', 'type': 'action'},
         {'name': 'Plot Average ERNA', 'type': 'action'},
-        {'name': 'Show Feature Table', 'type': 'action'}
     ])
     self.addChild(param)
 
@@ -139,11 +138,9 @@ class TestBooleanParams(ptree.parameterTypes.GroupParameter):
     self.filterStim = self.param('Filters', 'Stimulation Channel')
     self.filterButton = self.param('Filters', 'Filter Data')
     self.plotAvg = self.param('Filters', 'Plot Average ERNA')
-    self.featureBtn = self.param('Filters', 'Show Feature Table')
 
     self.filterButton.sigActivated.connect(self.local_filter_data)  # connect button to filter function
     self.plotAvg.sigActivated.connect(self.plot_avg_clicked)
-    self.featureBtn.sigActivated.connect(self.featureTableClicked)
 
   # maybe these can be removed for redundancy with local_filter_data ???
   def getFilterFreq(self):
@@ -170,12 +167,6 @@ class TestBooleanParams(ptree.parameterTypes.GroupParameter):
     amp = parse_param(self.filterAmp.value())
     stim = parse_param(self.filterStim.value())
     self.p.plot_average_erna(freq_filter=freq, amp_filter=amp, stim_filter=stim)
-
-  def featureTableClicked(self):
-    freq = parse_param(self.filterFreq.value())
-    amp  = parse_param(self.filterAmp.value())
-    stim = parse_param(self.filterStim.value())
-    self.p.show_feature_table(freq, amp, stim)
 
   def aChanged(self):
     self.p.setSortChs(self.a.value())
@@ -246,11 +237,52 @@ class CCEPFilter(GridFilter):
     settingsD.addWidget(settingsLab)
     settingsD.addWidget(self.t)
 
-    self.tableDock = Dock("Table", widget=self.table)
+    self.tableDock = Dock("Latest Epoch Metrics", widget=self.table)
     self.area.addDock(settingsD)
     self.area.addDock(self.tableDock, position='above', relativeTo=settingsD)
     self.plotsDock = Dock("Plots", widget=self.gridPlots)
     self.area.addDock(self.plotsDock, position='above', relativeTo=self.tableDock)
+
+    # add feature summary widget to dock
+    summaryContainer = QtWidgets.QWidget()
+    summaryContainer.setStyleSheet("""
+        QLabel { 
+            font-size: 12pt; 
+            font-weight: bold;
+        }
+    """)
+    summaryLayout    = QtWidgets.QVBoxLayout(summaryContainer)
+    summaryLayout.setContentsMargins(5,5,5,5)
+    summaryLayout.setSpacing(10)
+
+    self.freqSummaryTable = QtWidgets.QTableWidget()
+    self.freqSummaryTable.setColumnCount(6)
+    self.freqSummaryTable.setHorizontalHeaderLabels([
+        "Frequency (Hz)", "Mean AUC", "Mean P2P", "Mean RMS", "Min RMS", "Max RMS"
+    ])
+    summaryLayout.addWidget(QtWidgets.QLabel("<b>Frequency</b>"))
+    summaryLayout.addWidget(self.freqSummaryTable, 1)
+
+    self.ampSummaryTable = QtWidgets.QTableWidget()
+    self.ampSummaryTable.setColumnCount(6)
+    self.ampSummaryTable.setHorizontalHeaderLabels([
+        "Amplitude (mA)", "Mean AUC", "Mean P2P", "Mean RMS", "Min RMS", "Max RMS"
+    ])
+    summaryLayout.addWidget(QtWidgets.QLabel("<b>Amplitude</b>"))
+    summaryLayout.addWidget(self.ampSummaryTable, 1)
+
+    self.stimSummaryTable = QtWidgets.QTableWidget()
+    self.stimSummaryTable.setColumnCount(6)
+    self.stimSummaryTable.setHorizontalHeaderLabels([
+        "Stim Channel", "Mean AUC", "Mean P2P", "Mean RMS", "Min RMS", "Max RMS"
+    ])
+    summaryLayout.addWidget(QtWidgets.QLabel("<b>Stim Channel</b>"))
+    summaryLayout.addWidget(self.stimSummaryTable, 1)
+
+    self.summaryDock = Dock("Feature Summary", widget=summaryContainer, closable=False)
+    self.area.addDock(self.summaryDock, position='below', relativeTo=self.tableDock)
+
+    self.update_summary_table()
 
   def loadSettings(self):
     super().loadSettings()
@@ -323,6 +355,61 @@ class CCEPFilter(GridFilter):
               self.stimChs.append(self.chNames[b]) #append ch name
             else:
               print(f"[WARN] Bit position {b} exceeds available channels ({len(self.chNames)})") #append ch name
+
+  def update_summary_table(self):
+        # 1) read filters
+    gen  = self.p.child('General Options')
+    freq = parse_param(gen.getFilterFreq().value())
+    amp  = parse_param(gen.getFilterAmp().value())
+    stim = parse_param(gen.getFilterStim().value())
+
+    # 2) fetch matching epochs
+    results = self.filter_data(freq, amp, stim)
+
+    # helper to fill any of the three tables
+    def _populate(tbl, keys, grouping):
+        tbl.clearContents()
+        tbl.setRowCount(len(keys))
+        for row, k in enumerate(keys):
+            group = grouping[k]
+            rms  = np.array([e['rms']  for e in group])
+            p2p  = np.array([e['p2p'] for e in group])
+            auc  = np.array([e['auc'] for e in group])
+            cells = [
+                str(k),
+                f"{auc.mean():.2f}", f"{p2p.mean():.2f}", f"{rms.mean():.2f}", f"{rms.min():.2f}", f"{rms.max():.2f}"
+            ]
+            for col, txt in enumerate(cells):
+                item = QtWidgets.QTableWidgetItem(txt)
+                if col>0:
+                    item.setTextAlignment(QtCore.Qt.AlignRight|QtCore.Qt.AlignVCenter)
+                tbl.setItem(row, col, item)
+        tbl.resizeColumnsToContents()
+
+    # 3a) by frequency
+    freq_group = {}
+    for e in results:
+        f = e.get('frequency')
+        if f is not None:
+            freq_group.setdefault(f, []).append(e)
+    _populate(self.freqSummaryTable, sorted(freq_group), freq_group)
+
+    # 3b) by amplitude
+    amp_group = {}
+    for e in results:
+        a = e.get('amplitude')
+        if a is not None:
+            amp_group.setdefault(a, []).append(e)
+    _populate(self.ampSummaryTable, sorted(amp_group), amp_group)
+
+    # 3c) by stimulation channel
+    stim_group = {}
+    for e in results:
+        s = e.get('stim_channel')
+        if s is not None:
+            stim_group.setdefault(s, []).append(e)
+    _populate(self.stimSummaryTable, sorted(stim_group), stim_group)
+
 
   def plot_average_erna(self, freq_filter, amp_filter, stim_filter):
     """
@@ -450,13 +537,10 @@ class CCEPFilter(GridFilter):
         self.epoch_count += 1
         self.epochDisplay.setValue(self.epoch_count)
         self.update_filter_dropdowns()
-        try:
-            freq = parse_param(self.p.child('Filters','Frequency').value())
-            amp  = parse_param(self.p.child('Filters','Amplitude').value())
-            stim = parse_param(self.p.child('Filters','Stimulation Channel').value())
-            self.show_feature_table(freq, amp, stim)
-        except Exception:
-            pass
+      try:
+          self.update_summary_table()
+      except Exception:
+          pass
         # stability = self.compute_stability()
         # if stability:
         #     print(f"ERNA Stability ➔ Detection rate: {stability['detection_rate']*100:.1f}% | Mean AUC: {stability['mean_auc']:.2f} | Variance: {stability['var_auc']:.2f}")
@@ -598,58 +682,6 @@ class CCEPFilter(GridFilter):
     self._sortChs = state
     if hasattr(self, 'chTable'):
         self._renderPlots(newData=False)
-
-  def show_feature_table(self, freq_filter, amp_filter, stim_filter):
-    # grab all matching epochs
-    results = self.filter_data(freq_filter, amp_filter, stim_filter)
-    if not results:
-        print("No matching epochs found.")
-        return
-
-    # group by frequency
-    summary = {}
-    for e in results:
-        f = e.get('frequency')
-        if f is None: 
-            continue
-        summary.setdefault(f, []).append(e)
-
-    if hasattr(self, 'summary_dock'):
-        try: self.area.removeDock(self.summary_dock)
-        except: pass
-
-    self.summary_dock = Dock("Feature Summary", size=(1,1), closable=True)
-    tbl = QtWidgets.QTableWidget()
-    self.summary_dock.addWidget(tbl)
-
-    anchor = getattr(self, 'feature_dock', None) or self.tableDock
-    self.area.addDock(self.summary_dock, 'below', anchor)
-
-    freqs = sorted(summary.keys())
-    tbl.setColumnCount(4)
-    tbl.setHorizontalHeaderLabels(["Frequency (Hz)", "Mean RMS", "Mean P2P", "Mean AUC"])
-    tbl.setRowCount(len(freqs))
-
-    for row, f in enumerate(freqs):
-        group = summary[f]
-        rms_vals = np.array([e['rms'] for e in group])
-        p2p_vals = np.array([e['p2p'] for e in group])
-        auc_vals = np.array([e['auc'] for e in group])
-
-        vals = [
-            str(f),
-            f"{rms_vals.mean():.2f}",
-            f"{p2p_vals.mean():.2f}",
-            f"{auc_vals.mean():.2f}"
-        ]
-        for col, txt in enumerate(vals):
-            item = QtWidgets.QTableWidgetItem(txt)
-            # right align numbers
-            if col>0:
-                item.setTextAlignment(QtCore.Qt.AlignRight|QtCore.Qt.AlignVCenter)
-            tbl.setItem(row, col, item)
-
-    tbl.resizeColumnsToContents()
 
   def _getChannelPositions(self):
       """
@@ -1042,7 +1074,7 @@ class CCEPPlot(pg.PlotItem):
     xLim = -self.p.baselineLength
     yLim = self.p.ccepLength
     axView.setXRange(xLim, yLim, padding=0)
-    axView.setYRange(-1000, 1000)
+    axView.setYRange(-600, 600)   # change y-axis of plots for better visualization
 
     self.setMinimumSize(100,100)
 
