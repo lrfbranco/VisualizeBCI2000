@@ -329,62 +329,39 @@ class CCEPFilter(GridFilter):
     sample_count = results[0]['data'].shape[0]
     time_axis = np.linspace(-self.baselineLength, self.ccepLength, sample_count)  # time for each captured epoch
 
-    avg_dock = Dock("Average ERNA", size=(1, 1))
+    avgPlotMap = {}
+
+    avg_dock = Dock("Average ERNA", size=(1, 1), closable=True)
     avg_widget = pg.GraphicsLayoutWidget()
     avg_dock.addWidget(avg_widget)
     self.area.addDock(avg_dock, position='right', relativeTo=None)
 
-    rows, cols = self.numRows, self.numColumns
-    # fig, axes = plt.subplots(rows, cols, figsize=(cols*4, rows*3),
-    #                          sharex=True, sharey=True)
-    # axes = np.atleast_2d(axes)
+    for chName, (row, col) in self._getChannelPositions().items():
+      ch_epochs = [chunk['data'] 
+                    for chunk in results 
+                    if chunk.get('channel') == chName]   # use stored metadata channel name
+      if not ch_epochs:
+          continue
 
-    for r in range(rows):
-        for c in range(cols):
-            #ax = axes[r, c]
-            idx = r*cols + c
-            if idx >= len(self.chNames):
-                #ax.set_visible(False)
-                continue
+      data_array = np.stack(ch_epochs, axis=0)
+      avg = data_array.mean(axis=0)
+      sem = data_array.std(axis=0) / np.sqrt(data_array.shape[0])
 
-            chName = self.chNames[idx]
-            ch_epochs = [chunk['data'] 
-                         for chunk in results 
-                         if chunk.get('channel') == chName]   # use stored metadata channel name
-            if not ch_epochs:
-                #ax.set_visible(False)
-                continue
+      p = pg.PlotItem(title=f"{chName}\n(n={data_array.shape[0]})")
+      p.plot(time_axis, avg, pen=pg.mkPen('b', width=1.5))
+      upper = p.plot(time_axis, avg + sem, pen=None)
+      lower = p.plot(time_axis, avg - sem, pen=None)
+      fill = pg.FillBetweenItem(upper, lower, brush=(0, 0, 255, 50))
+      p.addItem(fill)
 
-            data_array = np.stack(ch_epochs, axis=0)
-            avg = data_array.mean(axis=0)
-            sem = data_array.std(axis=0) / np.sqrt(data_array.shape[0])
+      p.setTitle(f"{chName}\n(n={data_array.shape[0]})")
+      p.setLabel('bottom', 'Time (ms)')
+      p.setLabel('left', 'Amplitude (µV)')
+      p.setYRange(-1000, 1000)
 
-            p = avg_widget.addPlot(row=r, col=c)
-            p.plot(time_axis, avg, pen=pg.mkPen('b', width=1.5))
-            upper = p.plot(time_axis, avg + sem, pen=None)
-            lower = p.plot(time_axis, avg - sem, pen=None)
-            fill = pg.FillBetweenItem(upper, lower, brush=(0, 0, 255, 50))
-            p.addItem(fill)
+      avgPlotMap[chName] = p
 
-            p.setTitle(f"{chName}\n(n={data_array.shape[0]})")
-            p.setLabel('bottom', 'Time (ms)')
-            p.setLabel('left', 'Amplitude (µV)')
-            p.setYRange(-1000, 1000)
-
-            # ax.plot(time_axis, avg, color='blue')
-            # ax.fill_between(time_axis,
-            #                 avg - sem,
-            #                 avg + sem,
-            #                 alpha=0.3, color='blue')
-            # ax.set_title(f"{chName}\n(n={data_array.shape[0]})")
-            # ax.set_ylim(-1000, 1000)
-            # ax.grid(True)
-            # if r == rows-1:  ax.set_xlabel("Time (ms)")
-            # if c == 0:       ax.set_ylabel("µV")
-
-    # plt.tight_layout(rect=[0,0,1,0.95]) # reserve space at top of figure for title
-    # plt.suptitle("Average ERNA by Channel", y=1.02, fontsize=16)
-    # plt.show()
+    self._applyLayout(avg_widget, avgPlotMap)
     avg_widget.show()
 
   def plot(self, data):
@@ -601,115 +578,86 @@ class CCEPFilter(GridFilter):
     self._sortChs = state
     if hasattr(self, 'chTable'):
         self._renderPlots(newData=False)
-  
-  def applyDBSLayout(self, state):
-    if not hasattr(self, 'chTable'):
-      return
-      
-    if state:   # if box is checked
-      leftOn = self.p.param('General Options', 'DBS Layout Left').value()
+
+  def _getChannelPositions(self):
+      """
+      Returns a dict {channelName: (row, col)} based on current DBS or default layout.
+      """
+      leftOn  = self.p.param('General Options', 'DBS Layout Left').value()
       rightOn = self.p.param('General Options', 'DBS Layout Right').value()
 
-      positions = {}
+      if leftOn or rightOn:
+          # Define left and right DBS mappings
+          left_positions = {
+              "Lv4_L":  (0, 1), "Lv3C_L": (1, 0), "Lv3A_L": (1, 1), "Lv3B_L": (1, 2),
+              "Lv2C_L": (2, 0), "Lv2A_L": (2, 1), "Lv2B_L": (2, 2), "Lv1_L":  (3, 1),
+          }
+          right_positions = {
+              "Lv4_R":  (0, 5), "Lv3C_R": (1, 4), "Lv3A_R": (1, 5), "Lv3B_R": (1, 6),
+              "Lv2C_R": (2, 4), "Lv2A_R": (2, 5), "Lv2B_R": (2, 6), "Lv1_R":  (3, 5),
+          }
+          positions = {}
+          if leftOn:
+              positions.update(left_positions)
+          if rightOn:
+              positions.update(right_positions)
+          return positions
+      else:
+          # Default row-major layout
+          positions = {}
+          for i, ch in enumerate(self.chNames):
+              row = i // self.numColumns
+              col = i % self.numColumns
+              positions[ch] = (row, col)
+          return positions
 
-      if leftOn and not rightOn:
-        positions = {
-          "Lv4_L":  (0, 1),
-          "Lv3C_L": (1, 0),
-          "Lv3A_L": (1, 1),
-          "Lv3B_L": (1, 2),
-          "Lv2C_L": (2, 0),
-          "Lv2A_L": (2, 1),
-          "Lv2B_L": (2, 2),
-          "Lv1_L":  (3, 1),
-        }
-        self.updateTableForDBSLayout()
-      
-      if rightOn and not leftOn:
-        positions = {
-          "Lv4_R":  (0, 1),
-          "Lv3C_R": (1, 0),
-          "Lv3A_R": (1, 1),
-          "Lv3B_R": (1, 2),
-          "Lv2C_R": (2, 0),
-          "Lv2A_R": (2, 1),
-          "Lv2B_R": (2, 2),
-          "Lv1_R":  (3, 1),
-        }
-        self.updateTableForDBSLayout()
-      
-      if leftOn and rightOn:
-        positions = {
-          "Lv4_L":  (0, 1),
-          "Lv3C_L": (1, 0),
-          "Lv3A_L": (1, 1),
-          "Lv3B_L": (1, 2),
-          "Lv2C_L": (2, 0),
-          "Lv2A_L": (2, 1),
-          "Lv2B_L": (2, 2),
-          "Lv1_L":  (3, 1),
+  def _applyLayout(self, layoutWidget, plotMap):
+      """
+      Clear existing items and place each PlotItem from plotMap into layoutWidget
+      using positions from _getChannelPositions().
+      """
+      # Remove all existing items
+      layoutWidget.clear()
+      # Fetch where each channel should go
+      positions = self._getChannelPositions()
+      # Add only valid PlotItems
+      for chName, (r, c) in positions.items():
+          item = plotMap.get(chName)
+          if isinstance(item, pg.PlotItem):
+              layoutWidget.addItem(item, row=r, col=c)
 
-          "Lv4_R":  (0, 5),
-          "Lv3C_R": (1, 4),
-          "Lv3A_R": (1, 5),
-          "Lv3B_R": (1, 6),
-          "Lv2C_R": (2, 4),
-          "Lv2A_R": (2, 5),
-          "Lv2B_R": (2, 6),
-          "Lv1_R":  (3, 5),
-        }
-        for row in range(self.table.rowCount()):
-            self.table.setRowHidden(row, False)
-         
+  def applyDBSLayout(self, state):
+      """
+      Apply DBS or default layout to the raw-data gridPlots.
+      """
+      if not hasattr(self, 'chTable'):
+          return
 
-      self.displayedPlots = {}  # initialize empty dictionary that will hold subset of current plots being displayed
-      self.gridPlots.clear()
+      # 1) Update table to show only channels in active layout
+      self.updateTableForDBSLayout()
 
-    # add dbs plots to grid and track them
-      for chName, (row, col) in positions.items(): # iterates through each channel
-          if chName in self.chTable:
-              chIdx = self.chNames.index(chName)
-              chPlot = self.chPlot[chIdx]
-              if chPlot:
-                  self.gridPlots.addItem(chPlot, row=row, col=col)
-                  self.displayedPlots[chIdx] = chPlot
+      # 2) Build mapping: channelName -> PlotItem (filter out any non-PlotItems)
+      plotMap = {}
+      for idx, chName in enumerate(self.chNames):
+          item = self.chPlot[idx]
+          if isinstance(item, pg.PlotItem):
+              plotMap[chName] = item
 
-      self.windows = len(self.displayedPlots)
-      self._dbsLayout = True
-      #self._renderPlots(newData=False) # add new data?
+      # 3) Re-layout the gridPlots area
+      self._applyLayout(self.gridPlots, plotMap)
 
-    if self._dbsLayout and not state:  # if box is unchecked
-        for ch in self.chTable.values():
-            ch.totalChanged(False)  # reset flags
-        for row in range(self.table.rowCount()):
-            self.table.setRowHidden(row, False)
-        self.table.sortItems(Column.Name.value, QtCore.Qt.DescendingOrder)
-
-        self._dbsLayout = False
-
-        self.gridPlots.clear()
-        self.displayedPlots = {}
-
-        self.windows = min(self._maxWindows, self.channels)
-        self.numColumns = int(np.floor(np.sqrt(self.windows)))
-        self.numRows = int(np.ceil(self.windows / self.numColumns))
-
-        for r in range(self.numRows):
-            for c in range(self.numColumns):
-                ch = r * self.numColumns + c
-                if ch < self.windows:
-                    chName = self.chNames[ch]
-                    chIdx = self.chNames.index(chName)
-                    chPlot = self.chPlot[chIdx]  # use existing plot
-                    if chPlot:
-                        self.gridPlots.addItem(chPlot, row=r, col=c)
-                        self.displayedPlots[chIdx] = chPlot
-
-        self._renderPlots(newData=False)
+      # 4) Update flags and re-render plots
+      self._dbsLayout = state
+      self._renderPlots(newData=False)
 
   def updateTableForDBSLayout(self):
     leftOn = self.p.param('General Options', 'DBS Layout Left').value()
     rightOn = self.p.param('General Options', 'DBS Layout Right').value()
+
+    if not leftOn and not rightOn:
+        for row in range(self.table.rowCount()):
+            self.table.setRowHidden(row, False)
+        return
 
     for row in range(self.table.rowCount()):
       ch_item = self.table.item(row, Column.Name.value)
