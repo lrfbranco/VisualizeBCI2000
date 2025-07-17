@@ -22,25 +22,29 @@ def to_py_type(x):
 
 # insert grouped data entries (call right after data is ready for storage (preprocessed))
 def add_chunk(data, meta):
-    f = to_py_type(meta['frequency'])
-    a = to_py_type(meta['amplitude'])
-    s = to_py_type(meta['stim_channel'])
+    f = to_py_type(meta.get('frequency'))
+    a = to_py_type(meta.get('amplitude'))
+    s = to_py_type(meta.get('stim_channel'))
 
-    if f not in root:
-        root[f] = {}
-    if a not in root[f]:
-        root[f][a] = {}
-    if s not in root[f][a]:
-        root[f][a][s] = {'_chunks': []}
+    # ensure nested dicts exist
+    root.setdefault(f, {})\
+        .setdefault(a, {})\
+        .setdefault(s, {'_chunks': []})
 
     node = root[f][a][s]
-    # for k in metadata_keys:
-    #     node = node[meta[k]]
+
+    # store all relevant metadata right in the chunk
     entry = {
-    'data': data,
-    'trial_id': meta.get('trial_id'),
-    'channel': meta.get('channel')
-    }    # sample metadata that comes with actual data
+        'data': data,
+        'trial_id':    meta.get('trial_id'),
+        'frequency':   f,
+        'amplitude':   a,
+        'stim_channel': s,
+        'channel':     meta.get('channel'),
+        'rms':         meta.get('rms',   np.nan),
+        'p2p':         meta.get('p2p',   np.nan),
+        'auc':         meta.get('auc',   0),
+    }
     node.setdefault('_chunks', []).append(entry)
 
 # retrieve all data chunks that match full metadata query
