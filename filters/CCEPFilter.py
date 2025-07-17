@@ -321,26 +321,30 @@ class CCEPFilter(GridFilter):
     2) compute mean and SEM across those epochs
     3) plot in 4x4 layout (same as raw data layout)
     """
-
     results = self.filter_data(freq_filter, amp_filter, stim_filter)
     if not results:
       print("No matching epochs found.")
       return
-
-    rows, cols = self.numRows, self.numColumns
-    fig, axes = plt.subplots(rows, cols, figsize=(cols*4, rows*3),
-                             sharex=True, sharey=True)
-    axes = np.atleast_2d(axes)
-
+    
     sample_count = results[0]['data'].shape[0]
     time_axis = np.linspace(-self.baselineLength, self.ccepLength, sample_count)  # time for each captured epoch
 
+    avg_dock = Dock("Average ERNA", size=(1, 1))
+    avg_widget = pg.GraphicsLayoutWidget()
+    avg_dock.addWidget(avg_widget)
+    self.area.addDock(avg_dock, position='right', relativeTo=None)
+
+    rows, cols = self.numRows, self.numColumns
+    # fig, axes = plt.subplots(rows, cols, figsize=(cols*4, rows*3),
+    #                          sharex=True, sharey=True)
+    # axes = np.atleast_2d(axes)
+
     for r in range(rows):
         for c in range(cols):
-            ax = axes[r, c]
+            #ax = axes[r, c]
             idx = r*cols + c
             if idx >= len(self.chNames):
-                ax.set_visible(False)
+                #ax.set_visible(False)
                 continue
 
             chName = self.chNames[idx]
@@ -348,27 +352,40 @@ class CCEPFilter(GridFilter):
                          for chunk in results 
                          if chunk.get('channel') == chName]   # use stored metadata channel name
             if not ch_epochs:
-                ax.set_visible(False)
+                #ax.set_visible(False)
                 continue
 
             data_array = np.stack(ch_epochs, axis=0)
             avg = data_array.mean(axis=0)
             sem = data_array.std(axis=0) / np.sqrt(data_array.shape[0])
 
-            ax.plot(time_axis, avg, color='blue')
-            ax.fill_between(time_axis,
-                            avg - sem,
-                            avg + sem,
-                            alpha=0.3, color='blue')
-            ax.set_title(f"{chName}\n(n={data_array.shape[0]})")
-            ax.set_ylim(-1000, 1000)
-            ax.grid(True)
-            if r == rows-1:  ax.set_xlabel("Time (ms)")
-            if c == 0:       ax.set_ylabel("µV")
+            p = avg_widget.addPlot(row=r, col=c)
+            p.plot(time_axis, avg, pen=pg.mkPen('b', width=1.5))
+            upper = p.plot(time_axis, avg + sem, pen=None)
+            lower = p.plot(time_axis, avg - sem, pen=None)
+            fill = pg.FillBetweenItem(upper, lower, brush=(0, 0, 255, 50))
+            p.addItem(fill)
 
-    plt.tight_layout(rect=[0,0,1,0.95]) # reserve space at top of figure for title
-    plt.suptitle("Average ERNA by Channel", y=1.02, fontsize=16)
-    plt.show()
+            p.setTitle(f"{chName}\n(n={data_array.shape[0]})")
+            p.setLabel('bottom', 'Time (ms)')
+            p.setLabel('left', 'Amplitude (µV)')
+            p.setYRange(-1000, 1000)
+
+            # ax.plot(time_axis, avg, color='blue')
+            # ax.fill_between(time_axis,
+            #                 avg - sem,
+            #                 avg + sem,
+            #                 alpha=0.3, color='blue')
+            # ax.set_title(f"{chName}\n(n={data_array.shape[0]})")
+            # ax.set_ylim(-1000, 1000)
+            # ax.grid(True)
+            # if r == rows-1:  ax.set_xlabel("Time (ms)")
+            # if c == 0:       ax.set_ylabel("µV")
+
+    # plt.tight_layout(rect=[0,0,1,0.95]) # reserve space at top of figure for title
+    # plt.suptitle("Average ERNA by Channel", y=1.02, fontsize=16)
+    # plt.show()
+    avg_widget.show()
 
   def plot(self, data):
     #if self.checkPlot():
