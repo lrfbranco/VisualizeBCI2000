@@ -253,32 +253,69 @@ class CCEPFilter(GridFilter):
     """)
     summaryLayout    = QtWidgets.QVBoxLayout(summaryContainer)
     summaryLayout.setContentsMargins(5,5,5,5)
-    summaryLayout.setSpacing(10)
+    summaryLayout.setSpacing(5)
 
-    self.freqSummaryTable = QtWidgets.QTableWidget()
-    self.freqSummaryTable.setColumnCount(6)
-    self.freqSummaryTable.setHorizontalHeaderLabels([
-        "Frequency (Hz)", "Mean AUC", "Mean P2P", "Mean RMS", "Min RMS", "Max RMS"
-    ])
-    summaryLayout.addWidget(QtWidgets.QLabel("<b>Frequency</b>"))
-    summaryLayout.addWidget(self.freqSummaryTable, 1)
+    tabs = QtWidgets.QTabWidget()
+    summaryLayout.addWidget(tabs, 1)
 
-    self.ampSummaryTable = QtWidgets.QTableWidget()
-    self.ampSummaryTable.setColumnCount(6)
-    self.ampSummaryTable.setHorizontalHeaderLabels([
-        "Amplitude (mA)", "Mean AUC", "Mean P2P", "Mean RMS", "Min RMS", "Max RMS"
-    ])
-    summaryLayout.addWidget(QtWidgets.QLabel("<b>Amplitude</b>"))
-    summaryLayout.addWidget(self.ampSummaryTable, 1)
+    def _makeHemisphereTab(name):
+        w      = QtWidgets.QWidget()
+        layout = QtWidgets.QVBoxLayout(w)
+        layout.setContentsMargins(2,2,2,2)
+        layout.setSpacing(4)
 
-    self.stimSummaryTable = QtWidgets.QTableWidget()
-    self.stimSummaryTable.setColumnCount(6)
-    self.stimSummaryTable.setHorizontalHeaderLabels([
-        "Stim Channel", "Mean AUC", "Mean P2P", "Mean RMS", "Min RMS", "Max RMS"
-    ])
-    summaryLayout.addWidget(QtWidgets.QLabel("<b>Stim Channel</b>"))
-    summaryLayout.addWidget(self.stimSummaryTable, 1)
+        freqLabel = QtWidgets.QLabel("Frequency")
+        font = freqLabel.font()
+        font.setPointSize(9)
+        font.setBold(True)
+        freqLabel.setFont(font)
+        freqLabel.setStyleSheet("color: black;")
+        layout.addWidget(freqLabel)
 
+        tbl_f = QtWidgets.QTableWidget()
+        tbl_f.setColumnCount(6)
+        tbl_f.setHorizontalHeaderLabels([
+            f"{name} – Freq (Hz)",
+            "Mean AUC", "Mean P2P", "Mean RMS", "Min RMS", "Max RMS"
+        ])
+        layout.addWidget(tbl_f, 1)
+
+        ampLabel = QtWidgets.QLabel("Amplitude")
+        ampLabel.setFont(font)
+        ampLabel.setStyleSheet("color: black;")
+        layout.addWidget(ampLabel)
+
+        tbl_a = QtWidgets.QTableWidget()
+        tbl_a.setColumnCount(6)
+        tbl_a.setHorizontalHeaderLabels([
+            f"{name} – Amp (mA)",
+            "Mean AUC", "Mean P2P", "Mean RMS", "Min RMS", "Max RMS"
+        ])
+        layout.addWidget(tbl_a, 1)
+
+        stimLabel = QtWidgets.QLabel("Stimulation Channel")
+        stimLabel.setFont(font)
+        stimLabel.setStyleSheet("color: black;")
+        layout.addWidget(stimLabel)
+
+        tbl_s = QtWidgets.QTableWidget()
+        tbl_s.setColumnCount(6)
+        tbl_s.setHorizontalHeaderLabels([
+            f"{name} – Stim Ch",
+            "Mean AUC", "Mean P2P", "Mean RMS", "Min RMS", "Max RMS"
+        ])
+        layout.addWidget(tbl_s, 1)
+
+        return w, tbl_f, tbl_a, tbl_s
+
+    # build both tabs
+    leftTab,  self.freqLeftTable,  self.ampLeftTable,  self.stimLeftTable  = _makeHemisphereTab("Left")
+    rightTab, self.freqRightTable, self.ampRightTable, self.stimRightTable = _makeHemisphereTab("Right")
+
+    tabs.addTab(leftTab,  "Left")
+    tabs.addTab(rightTab, "Right")
+
+    # dock it
     self.summaryDock = Dock("Feature Summary", widget=summaryContainer, closable=False)
     self.area.addDock(self.summaryDock, position='below', relativeTo=self.tableDock)
 
@@ -302,21 +339,6 @@ class CCEPFilter(GridFilter):
     self._trigCh = self.p.child('Auto Detect Options')['Detection channel']
     self.epoch_count = 0
     self.epochDisplay.setValue(self.epoch_count)    # set epoch count to zero upon restarting GUI
-
-    # reset filter dropdowns to be empty upon restarting GUI
-    # test_params = self.p.child('General Options')
-    # freq_param = test_params.getFilterFreq()
-    # amp_param = test_params.getFilterAmp()
-    # stim_param = test_params.getFilterStim()
-    # freq_defaults = ['All']
-    # amp_defaults = ['All']
-    # stim_defaults = ['All']
-    # freq_param.setLimits(freq_defaults)
-    # amp_param.setLimits(amp_defaults)
-    # stim_param.setLimits(stim_defaults)
-    # freq_param.setValue('All')
-    # amp_param.setValue('All')
-    # stim_param.setValue('All')
 
   def saveSettings(self):
     super().saveSettings()
@@ -357,19 +379,33 @@ class CCEPFilter(GridFilter):
               print(f"[WARN] Bit position {b} exceeds available channels ({len(self.chNames)})") #append ch name
 
   def update_summary_table(self):
-        # 1) read filters
+    # grab filters
     gen  = self.p.child('General Options')
     freq = parse_param(gen.getFilterFreq().value())
     amp  = parse_param(gen.getFilterAmp().value())
     stim = parse_param(gen.getFilterStim().value())
 
-    # 2) fetch matching epochs
+    # fetch matching epochs
     results = self.filter_data(freq, amp, stim)
 
-    # helper to fill any of the three tables
+    # separate left vs right by last letter of channel name (will update later)
+    left  = [e for e in results if e.get('channel','').endswith('_L')]
+    right = [e for e in results if e.get('channel','').endswith('_R')]
+
+    # helper that builds {key → list of entries}
+    def _group_by(entries, meta_key):
+        d = {}
+        for e in entries:
+            k = e.get(meta_key)
+            if k is None: continue
+            d.setdefault(k, []).append(e)
+        return d
+
+    # fill table
     def _populate(tbl, keys, grouping):
         tbl.clearContents()
         tbl.setRowCount(len(keys))
+        tbl.verticalHeader().setVisible(False)
         for row, k in enumerate(keys):
             group = grouping[k]
             rms  = np.array([e['rms']  for e in group])
@@ -381,34 +417,50 @@ class CCEPFilter(GridFilter):
             ]
             for col, txt in enumerate(cells):
                 item = QtWidgets.QTableWidgetItem(txt)
+                if col == 0:
+                    font = item.font()
+                    font.setBold(True)
+                    item.setFont(font)
                 if col>0:
                     item.setTextAlignment(QtCore.Qt.AlignRight|QtCore.Qt.AlignVCenter)
                 tbl.setItem(row, col, item)
         tbl.resizeColumnsToContents()
 
-    # 3a) by frequency
-    freq_group = {}
-    for e in results:
-        f = e.get('frequency')
-        if f is not None:
-            freq_group.setdefault(f, []).append(e)
-    _populate(self.freqSummaryTable, sorted(freq_group), freq_group)
+    # frequency summaries
+    _populate(
+        self.freqLeftTable,
+        sorted(_group_by(left,  'frequency').keys()),
+        _group_by(left,  'frequency')
+    )
+    _populate(
+        self.freqRightTable,
+        sorted(_group_by(right, 'frequency').keys()),
+        _group_by(right, 'frequency')
+    )
 
-    # 3b) by amplitude
-    amp_group = {}
-    for e in results:
-        a = e.get('amplitude')
-        if a is not None:
-            amp_group.setdefault(a, []).append(e)
-    _populate(self.ampSummaryTable, sorted(amp_group), amp_group)
+    # amplitude summaries
+    _populate(
+        self.ampLeftTable,
+        sorted(_group_by(left,  'amplitude').keys()),
+        _group_by(left,  'amplitude')
+    )
+    _populate(
+        self.ampRightTable,
+        sorted(_group_by(right, 'amplitude').keys()),
+        _group_by(right, 'amplitude')
+    )
 
-    # 3c) by stimulation channel
-    stim_group = {}
-    for e in results:
-        s = e.get('stim_channel')
-        if s is not None:
-            stim_group.setdefault(s, []).append(e)
-    _populate(self.stimSummaryTable, sorted(stim_group), stim_group)
+    # stim-channel summaries
+    _populate(
+        self.stimLeftTable,
+        sorted(_group_by(left,  'stim_channel').keys()),
+        _group_by(left,  'stim_channel')
+    )
+    _populate(
+        self.stimRightTable,
+        sorted(_group_by(right, 'stim_channel').keys()),
+        _group_by(right, 'stim_channel')
+    )
 
 
   def plot_average_erna(self, freq_filter, amp_filter, stim_filter):
