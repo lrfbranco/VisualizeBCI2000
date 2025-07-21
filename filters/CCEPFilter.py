@@ -230,6 +230,12 @@ class CCEPFilter(GridFilter):
     self.epochDisplay = self.p.param('Epoch Count')
     self.epochDisplay.setValue(self.epoch_count)
 
+    self.p.addChild({'name': 'Select Epoch', 'type': 'int', 'value': 0, 'limits': [0,0]})
+    self.epochParam = self.p.param('Select Epoch')
+    self.p.addChild({'name': 'Plot Selected Epoch', 'type': 'action'})
+    self.plotEpochBtn = self.p.param('Plot Selected Epoch')
+    self.plotEpochBtn.sigActivated.connect(self.plot_selected_epoch)
+
     #self.t.setParameters(params)
     #self.t.resizeColumnToContents(0)
     self.t.header().setSectionResizeMode(pg.QtWidgets.QHeaderView.Stretch)
@@ -320,6 +326,27 @@ class CCEPFilter(GridFilter):
     self.area.addDock(self.summaryDock, position='below', relativeTo=self.tableDock)
 
     self.update_summary_table()
+
+  def plot_selected_epoch(self):
+    idx = self.epochParam.value()
+
+    results = get_partial({'trial_id': idx})
+    if not results:
+        self.logPrint(f"No data for epoch {idx}")
+        return
+    
+    meta = results[0]
+    freq = meta.get('frequency', 'N/A')
+    amp  = meta.get('amplitude', 'N/A')
+    stim = meta.get('stim_channel', 'N/A')
+
+    self.logPrint(
+            f"Epoch {idx} parameters ➔ "
+            f"Frequency: {freq} Hz | "
+            f"Amplitude: {amp} mA | "
+            f"Stim Channel: {stim}"
+        )
+    self.plot_epoch(idx)
 
   def loadSettings(self):
     super().loadSettings()
@@ -513,6 +540,40 @@ class CCEPFilter(GridFilter):
     self._applyLayout(avg_widget, avgPlotMap)
     avg_widget.show()
 
+  def plot_epoch(self, epoch_index):
+    # fetch just this trial’s chunks
+    results = get_partial({'trial_id': epoch_index})
+    if not results:
+        print(f"No data for epoch {epoch_index}")
+        return
+
+    # time axis (ms)
+    sample_count = results[0]['data'].shape[0]
+    t = np.linspace(-self.baselineLength, self.ccepLength, sample_count)
+
+    # create a new dock for this epoch
+    epoch_dock   = Dock(f"Epoch {epoch_index}", closable=True)
+    epoch_widget = pg.GraphicsLayoutWidget()
+    epoch_dock.addWidget(epoch_widget)
+    self.area.addDock(epoch_dock, position='right', relativeTo=None)
+
+    # plot each channel in its grid-cell
+    for chName, (r, c) in self._getChannelPositions().items():
+        # find the one chunk matching this channel
+        chunks = [e['data'] for e in results if e.get('channel') == chName]
+        if not chunks:
+            continue
+        data = chunks[0]    # each epoch only has one trace per channel
+
+        p = epoch_widget.addPlot(row=r, col=c, title=chName)
+        p.plot(t, data, pen=pg.mkPen('w', width=1))
+        p.setLabel('bottom', 'Time (ms)')
+        p.setLabel('left', 'Amplitude (µV)')
+        p.setYRange(-600, 600)
+
+    epoch_widget.show()
+
+
   def plot(self, data):
     #if self.checkPlot():
     if self.numTrigs > 0:
@@ -588,6 +649,10 @@ class CCEPFilter(GridFilter):
 
         self.epoch_count += 1
         self.epochDisplay.setValue(self.epoch_count)
+        try:
+           self.epochParam.setLimits([0, self.epoch_count])
+        except Exception:
+           pass
         self.update_filter_dropdowns()
       try:
           self.update_summary_table()
