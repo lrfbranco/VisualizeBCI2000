@@ -10,11 +10,8 @@ from base.SharedVisualization import saveFigure
 from enum import Enum
 from scipy.signal import find_peaks
 from math import ceil
-from nested_defaultdict_store import add_chunk, get_group, get_partial, to_py_type
-from nested_defaultdict_store import root, metadata_keys
+from nested_defaultdict_store import (add_chunk, get_group, get_partial, to_py_type, root, metadata_keys)
 from pyqtgraph.parametertree import Parameter
-from collections import deque # used for rolling buffer
-import matplotlib.pyplot as plt # for plot testing
 from scipy.signal import detrend
 
 backgroundColor = (14, 14, 16)
@@ -203,8 +200,6 @@ class CCEPFilter(GridFilter):
     self.aucThresh = 0
     self.numTrigs = 0
 
-    self.erna_buffer = deque(maxlen=3) # create a rolling buffer of the last 10 erna detections
-
   def publish(self):
     super().publish()
 
@@ -212,6 +207,8 @@ class CCEPFilter(GridFilter):
     self.gridNums = pg.GraphicsLayoutWidget(title="CCEP Aggregate")
     self.table = QtWidgets.QTableWidget()
 
+
+    # ── SETTINGS DOCK ───────────────────────────────────────────────────────
     settingsD = Dock("Settings")
     settingsLab = QtWidgets.QLabel("Settings", objectName="h1")
 
@@ -225,6 +222,8 @@ class CCEPFilter(GridFilter):
     self.t = ptree.ParameterTree()
     self.t.setParameters(self.p)
 
+
+    # ── EPOCH CONTROLS ─────────────────────────────────────────────────────
     self.epoch_count = 0
     self.p.addChild({'name': 'Epoch Count', 'type': 'int', 'value': self.epoch_count, 'readonly': True})
     self.epochDisplay = self.p.param('Epoch Count')
@@ -243,12 +242,16 @@ class CCEPFilter(GridFilter):
     settingsD.addWidget(settingsLab)
     settingsD.addWidget(self.t)
 
+    # ── METRICS TABLE DOCK ─────────────────────────────────────────────────
     self.tableDock = Dock("Latest Epoch Metrics", widget=self.table)
     self.area.addDock(settingsD)
     self.area.addDock(self.tableDock, position='above', relativeTo=settingsD)
+
+    # ── RAW DATA PLOTS DOCK ────────────────────────────────────────────────
     self.plotsDock = Dock("Plots", widget=self.gridPlots)
     self.area.addDock(self.plotsDock, position='above', relativeTo=self.tableDock)
 
+    # ── FEATURE SUMMARY DOCK ──────────────────────────────────────────────
     # add feature summary widget to dock
     summaryContainer = QtWidgets.QWidget()
     summaryContainer.setStyleSheet("""
@@ -641,12 +644,6 @@ class CCEPFilter(GridFilter):
             meta['auc']     = ch.auc
             add_chunk(ch.data.copy(), meta)
 
-            is_detected = ch.auc > 1 # arbitrary threshold used for testing
-            self.erna_buffer.append({
-              'detected': is_detected,
-              'auc': ch.auc
-            })
-
         self.epoch_count += 1
         self.epochDisplay.setValue(self.epoch_count)
         try:
@@ -893,23 +890,6 @@ class CCEPFilter(GridFilter):
       )
       self.table.setRowHidden(row, not visible)
 
-  def compute_stability(self):
-    if not self.erna_buffer:
-      return None
-    
-    detections = [entry['detected'] for entry in self.erna_buffer]
-    aucs = [entry['auc'] for entry in self.erna_buffer]
-
-    detection_rate = sum(detections) / len(detections) # number of times erna was detected over the last 10 stimulations
-    mean_auc = np.mean(aucs)
-    var_auc = np.var(aucs)
-
-    return {
-        'detection_rate': detection_rate,
-        'mean_auc': mean_auc,
-        'var_auc': var_auc
-    }
-
   def filter_data(self, freq, amp, stim):
       # create query dictionary
       query = {}
@@ -920,15 +900,15 @@ class CCEPFilter(GridFilter):
       if stim != 'All':
           query['stim_channel'] = stim
       
-      print(f"\nFilter query → {query}")
+      #self.logPrint(f"\nFilter query → {query}")
 
       # retrieve matching data
       results = get_partial(query)
 
-      if results:
-          print(f"Number of Matching Results = {len(results)}")
-      else:
-          print("No matching results found.")
+      # if results:
+      #     self.logPrint(f"Number of Matching Results = {len(results)}")
+      # else:
+      #     self.logPrint("No matching results found.")
       return results
       #print(f"Filter results: {len(results)} entries found for query {query}")
   
