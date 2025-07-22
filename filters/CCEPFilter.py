@@ -332,24 +332,28 @@ class CCEPFilter(GridFilter):
 
   def plot_selected_epoch(self):
     idx = self.epochParam.value()
-
-    results = get_partial({'trial_id': idx})
-    if not results:
+    # grab all stored chunks
+    all_chunks = get_partial({})  # empty query returns everything
+    # manually filter by trial_id
+    epoch_chunks = [c for c in all_chunks if c.get('trial_id') == idx]
+    if not epoch_chunks:
         self.logPrint(f"No data for epoch {idx}")
         return
-    
-    meta = results[0]
-    freq = meta.get('frequency', 'N/A')
-    amp  = meta.get('amplitude', 'N/A')
-    stim = meta.get('stim_channel', 'N/A')
 
+    # pull stim parameters out of the first chunk
+    meta = epoch_chunks[0]
+    freq = meta['frequency']
+    amp  = meta['amplitude']
+    stim = meta['stim_channel']
     self.logPrint(
-            f"Epoch {idx} parameters ➔ "
-            f"Frequency: {freq} Hz | "
-            f"Amplitude: {amp} mA | "
-            f"Stim Channel: {stim}"
-        )
-    self.plot_epoch(idx)
+        f"Epoch {idx} parameters ➔ "
+        f"Frequency: {freq} Hz | "
+        f"Amplitude: {amp} mA | "
+        f"Stim Channel: {stim}"
+    )
+
+    # 4) Plot that epoch
+    self._show_epoch(epoch_chunks)
 
   def loadSettings(self):
     super().loadSettings()
@@ -543,50 +547,44 @@ class CCEPFilter(GridFilter):
     self._applyLayout(avg_widget, avgPlotMap)
     avg_widget.show()
 
-  def plot_epoch(self, epoch_index):
-    # fetch just this trial’s chunks
-    results = get_partial({'trial_id': epoch_index})
-    if not results:
-        print(f"No data for epoch {epoch_index}")
-        return
-
-    # time axis (ms)
-    sample_count = results[0]['data'].shape[0]
+  def _show_epoch(self, chunks):
+    sample_count = chunks[0]['data'].shape[0]
     t = np.linspace(-self.baselineLength, self.ccepLength, sample_count)
 
-    # create a new dock for this epoch
-    epoch_dock   = Dock(f"Epoch {epoch_index}", closable=True)
-    epoch_widget = pg.GraphicsLayoutWidget()
-    epoch_dock.addWidget(epoch_widget)
-    self.area.addDock(epoch_dock, position='right', relativeTo=None)
+    # new dock for this epoch
+    dock = Dock(f"Epoch {chunks[0]['trial_id']}", closable=True)
+    widget = pg.GraphicsLayoutWidget()
+    dock.addWidget(widget)
+    self.area.addDock(dock, position='right', relativeTo=None)
 
-    # plot each channel in its grid-cell
+    # for each channel, find its single chunk and plot it
     for chName, (r, c) in self._getChannelPositions().items():
-        # find the one chunk matching this channel
-        chunks = [e['data'] for e in results if e.get('channel') == chName]
-        if not chunks:
+        # find the data for this channel
+        chunk = next((e['data'] for e in chunks if e['channel'] == chName), None)
+        if chunk is None:
             continue
-        data = chunks[0]    # each epoch only has one trace per channel
 
-        p = epoch_widget.addPlot(row=r, col=c, title=chName)
-        p.plot(t, data, pen=pg.mkPen('w', width=1))
+        p = widget.addPlot(row=r, col=c, title=chName)
+        p.plot(t, chunk, pen=pg.mkPen(width=1))
         p.setLabel('bottom', 'Time (ms)')
         p.setLabel('left', 'Amplitude (µV)')
         p.setYRange(-600, 600)
 
-    epoch_widget.show()
-
+    widget.show()
 
   def plot(self, data):
+    # ── 1) Check for new triggers ───────────────────────────────────────────
     #if self.checkPlot():
     if self.numTrigs > 0:
       # print("plotting")
       self.numTrigs -= 1
 
-      #process data
-      aocs = []
-      chunk = False
-      peaks = None
+    # ── 2) Initialize per-epoch containers ─────────────────────────────────
+      aocs = []     # collects AUCs across channels
+      chunk = False # flag: did we detect a valid stimulation artifact?
+      peaks = None  # indices of detected peaks
+
+    # ── 3) Trigger‐channel artifact detection ───────────────────────────────
       if self.p.child('Auto Detect Options')['Detection channel']:
         #trigCh = self.p.child('General Options')['Sort channels']
         #get channel to use as trigger
@@ -601,24 +599,16 @@ class CCEPFilter(GridFilter):
             chIndex = 1
         self.trigData = data[chIndex - 1] #convert to 0-based, retreive last channel (trigger channel)
 
-        #get chunks by peaks
-        #hard code parameters just to test
-        # print(f"Trigger data max: {np.max(self.trigData)}, min: {np.min(self.trigData)}")
-
         peaks, properties = find_peaks(self.trigData, 1, distance=1)    # changed values for testing
-        # print(self.trigData)
+        chunk = len(peaks) >= 1       # our data has only one peak, so consider it
         # print(f"Found {len(peaks)} peaks") # TEMPORARILY DISABLE FOR TESTING
-        if len(peaks) >= 1:   # our data has only one peak, so consider it
-          chunk = True
-        else:
-          chunk = False
-        # print(chunk)
 
-        # #chunk based off artifact
-        # for i, ch in enumerate(self.chTable.values()):
-        #   ch.chunkData(data[i], peaks) #chunks and computes
-        #   aocs.append(ch.auc)
+        #chunk based off artifact
+        for i, ch in enumerate(self.chTable.values()):
+          ch.chunkData(data[i], peaks) #chunks and computes
+          aocs.append(ch.auc)
       
+      # ── 4) Decide between chunked vs continuous processing ──────────────────
       #compute and chunk data
       avgPlots = self.p.child('General Options')['Average CCEPS']
       if chunk:
@@ -634,9 +624,10 @@ class CCEPFilter(GridFilter):
         for i, ch in enumerate(self.chTable.values()):
             ch.chunkData(data[i], peaks, avgPlots)
             last_peak_idx = peaks[-1]
-            last_peak_time = last_peak_idx / self.sr * 1000 # in ms
-            ch.last_peak_time = last_peak_time
+            ch.last_peak_time = last_peak_idx / self.sr * 1000 # in ms
             ch.computeFeatures()
+
+            # build per-chunk metadata
             meta = fake_meta.copy()
             meta['channel'] = ch.title if hasattr(ch, 'title') else self.chNames[i]
             meta['rms']     = ch.rms
@@ -647,31 +638,27 @@ class CCEPFilter(GridFilter):
         self.epoch_count += 1
         self.epochDisplay.setValue(self.epoch_count)
         try:
-           self.epochParam.setLimits([0, self.epoch_count])
+           self.epochParam.setLimits([1, self.epoch_count])
         except Exception:
            pass
         self.update_filter_dropdowns()
+
+      else:
+          for i, ch in enumerate(self.chTable.values()):
+            ch.computeData(data[i], avgPlots)
+            last_peak_idx = peaks[-1] if peaks is not None else None
+            if last_peak_idx is not None:
+                ch.last_peak_time = last_peak_idx / self.sr * 1000
+            ch.computeFeatures()
+
       try:
           self.update_summary_table()
       except Exception:
           pass
-        # stability = self.compute_stability()
-        # if stability:
-        #     print(f"ERNA Stability ➔ Detection rate: {stability['detection_rate']*100:.1f}% | Mean AUC: {stability['mean_auc']:.2f} | Variance: {stability['var_auc']:.2f}")
 
-
-      else:
-          for i, ch in enumerate(self.chTable.values()):
-              ch.computeData(data[i], avgPlots)  # compute data
-              last_peak_idx = peaks[-1]
-              last_peak_time = last_peak_idx / self.sr * 1000 # in ms
-              ch.last_peak_time = last_peak_time
-              ch.computeFeatures()
-              # print("we are in the else")
-      for i, ch in enumerate(self.chTable.values()):
+      for ch in self.chTable.values():
           aocs.append(ch.auc)      
-      #send processed data
-      self.dataProcessedSignal.emit(aocs)
+      self.dataProcessedSignal.emit(aocs)   #send processed data
 
       #we scale by 10 cause slider can only do ints
       stds = self.p.child('General Options')['Threshold (STD)']
