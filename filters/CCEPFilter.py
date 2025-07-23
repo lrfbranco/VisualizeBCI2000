@@ -13,6 +13,7 @@ from math import ceil
 from nested_defaultdict_store import (add_chunk, get_group, get_partial, to_py_type, root, metadata_keys)
 from pyqtgraph.parametertree import Parameter
 from scipy.signal import detrend
+from PyQt5 import QtGui, QtCore
 
 backgroundColor = (14, 14, 16)
 highlightColor = (60, 60, 40)
@@ -116,6 +117,10 @@ class TestBooleanParams(ptree.parameterTypes.GroupParameter):
     self.h = self.param('Clear Figures')
     self.h.sigActivated.connect(self.hChanged)
 
+    self.addChild({'name': 'Hold Plots', 'type': 'int', 'value': 5, 'limits': [0, 100]}) #manually set to 5
+    self.holdParam = self.param('Hold Plots')
+    self.holdParam.sigValueChanged.connect(self.holdPlotsChanged)
+
     self.addChild({'name': 'View ERNA Dictionary', 'type': 'action'})
     self.p.viewDictButton = self.param('View ERNA Dictionary')
     self.p.viewDictButton.sigActivated.connect(self.viewDictClicked)
@@ -165,6 +170,9 @@ class TestBooleanParams(ptree.parameterTypes.GroupParameter):
     stim = parse_param(self.filterStim.value())
     self.p.plot_average_erna(freq_filter=freq, amp_filter=amp, stim_filter=stim)
 
+  def holdPlotsChanged(self, newValue):
+    self.p._holdPlots = newValue
+
   def aChanged(self):
     self.p.setSortChs(self.a.value())
   def bChanged(self):
@@ -199,6 +207,7 @@ class CCEPFilter(GridFilter):
     super().__init__(area, bciPath, stream)
     self.aucThresh = 0
     self.numTrigs = 0
+    self._holdPlots = 0
 
   def publish(self):
     super().publish()
@@ -342,18 +351,14 @@ class CCEPFilter(GridFilter):
 
     # pull stim parameters out of the first chunk
     meta = epoch_chunks[0]
-    freq = meta['frequency']
-    amp  = meta['amplitude']
-    stim = meta['stim_channel']
     self.logPrint(
         f"Epoch {idx} parameters ➔ "
-        f"Frequency: {freq} Hz | "
-        f"Amplitude: {amp} mA | "
-        f"Stim Channel: {stim}"
+        f"Frequency: {meta['frequency']} Hz | "
+        f"Amplitude: {meta['amplitude']} mA | "
+        f"Stim Channel: {meta['stim_channel']}"
     )
 
-    # 4) Plot that epoch
-    self._show_epoch(epoch_chunks)
+    self._show_epoch(idx, epoch_chunks)
 
   def loadSettings(self):
     super().loadSettings()
@@ -547,30 +552,54 @@ class CCEPFilter(GridFilter):
     self._applyLayout(avg_widget, avgPlotMap)
     avg_widget.show()
 
-  def _show_epoch(self, chunks):
-    sample_count = chunks[0]['data'].shape[0]
+  def _show_epoch(self, idx, chunks):
+    sample_count = chunks[0]['data'].shape[0]   # time axis
     t = np.linspace(-self.baselineLength, self.ccepLength, sample_count)
 
-    # new dock for this epoch
-    dock = Dock(f"Epoch {chunks[0]['trial_id']}", closable=True)
+    # create new dock for this epoch
+    dock = Dock(f"Epoch {idx}", closable=True)
+
+    container = QtWidgets.QWidget()
+    vlayout = QtWidgets.QVBoxLayout(container)
+    vlayout.setContentsMargins(2, 2, 2, 2)
+    vlayout.setSpacing(2)
+
+    # save button at the top
+    saveBtn = QtWidgets.QPushButton("💾 Save Figure")
+    vlayout.addWidget(saveBtn)
+
     widget = pg.GraphicsLayoutWidget()
-    dock.addWidget(widget)
-    self.area.addDock(dock, position='right', relativeTo=None)
+    self.lastEpochWidget = widget
+    vlayout.addWidget(widget, stretch=1)  # fill remaining space
 
-    # for each channel, find its single chunk and plot it
+    # connect button only after widget is created
+    saveBtn.clicked.connect(lambda _, w=widget, i=idx:
+                            self.save_epoch_figure(w, f"epoch_{i}.png"))
+
+    dock.addWidget(container)
+    self.area.addDock(dock, position='right')
+
     for chName, (r, c) in self._getChannelPositions().items():
-        # find the data for this channel
-        chunk = next((e['data'] for e in chunks if e['channel'] == chName), None)
-        if chunk is None:
+        data = next((e['data'] for e in chunks if e['channel'] == chName), None)
+        if data is None:
             continue
-
         p = widget.addPlot(row=r, col=c, title=chName)
-        p.plot(t, chunk, pen=pg.mkPen(width=1))
+        p.plot(t, data, pen=pg.mkPen(width=1))
         p.setLabel('bottom', 'Time (ms)')
         p.setLabel('left', 'Amplitude (µV)')
         p.setYRange(-600, 600)
 
     widget.show()
+
+  def save_epoch_figure(self, widget, filename):
+    QtGui.QGuiApplication.processEvents()
+    # Grab the widget’s contents as a QPixmap
+    pixmap = widget.grab()
+    # Save to disk
+    if pixmap.save(filename):
+        self.logPrint(f"Saved figure to {filename}")
+    else:
+        self.logPrint(f"Error: could not save figure to {filename}")
 
   def plot(self, data):
     # ── 1) Check for new triggers ───────────────────────────────────────────
@@ -983,6 +1012,17 @@ class CCEPFilter(GridFilter):
       t.totalChanged(0)
       t.database = []
 
+  def holdPlots(self, plotItem):
+    n = self.p.param('General Options', 'Hold Plots').value()
+    if n <= 0:
+        return
+
+    raws = plotItem.listDataItems()[1:]
+    excess = len(raws) - n
+    if excess > 0:
+        for old in raws[:excess]:
+            plotItem.removeItem(old)
+
   def saveFigures(self):
     #beautiful hack
     #mimic minimal mouse click
@@ -1024,6 +1064,10 @@ class CCEPFilter(GridFilter):
         self.chPlot[i].changePlot(chName, self.chTable[chName])
         self.chPlot[i].plotData(newData)
         i+=1
+  
+    for i, plotItem in enumerate(self.chPlot[:self.windows]):
+        plotItem.plotData(newData)
+        self.holdPlots(plotItem)
 
   def _changeBackgroundColor(self, row, emph):
     if row >= self.windows:
