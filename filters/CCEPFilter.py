@@ -7,7 +7,7 @@ from pyqtgraph.dockarea import *
 import pyqtgraph.parametertree as ptree
 from filters.filterBase.GridFilter import GridFilter
 from base.SharedVisualization import saveFigure
-from enum import Enum
+from enum import Enum, IntEnum, auto
 from scipy.signal import find_peaks
 from math import ceil
 from nested_defaultdict_store import (add_chunk, get_group, get_partial, to_py_type, root, metadata_keys)
@@ -41,6 +41,18 @@ class Column(Enum):
   AUC = 3
   RMS = 4
   P2P = 5
+class SharedStates(IntEnum): # These need to match the States names, shared via "ShareCCEPFilterStates" parameter
+  CCEPTriggered        = 0
+  StimulatingChannel   = auto() # Auto-increment
+  SenStimConnected     = auto() # Auto-increment
+  SenStimTriggered     = auto() # Auto-increment
+  SenStimEndBurst      = auto() # Auto-increment
+  SenStimAmpli         = auto() # Auto-increment
+  SenStimAmpli_dec     = auto() # Auto-increment
+  SenStimFreq          = auto() # Auto-increment
+  SenStimChannel       = auto() # Auto-increment
+  SenStimChansAnode    = auto() # Auto-increment
+  SenStimChansCathode  = auto() # Auto-increment
 
 #taken from pyqtgraph example
 ## test add/remove
@@ -405,20 +417,21 @@ class CCEPFilter(GridFilter):
   #define shared states we need for filter
   @property
   def sharedStates(self):
-    return ["CCEPTriggered", "StimulatingChannel"]
+    return [state.name for state in SharedStates]
   
   #define abstract methods
   def receiveStates(self, state):
     #get CCEPTriggered state to detect CCEPs
-    self.numTrigs += np.count_nonzero(state[0]) # keep running count of when CCEPTrigger occurs
     # print(f"[DEBUG] numTrigs: {self.numTrigs}")   # confirm numTrigs is updating
+    triggersFound = np.count_nonzero(state[SharedStates.CCEPTriggered])
+    self.numTrigs += triggersFound
 
     #find stim ch if possible
-    if np.shape(state)[0] > 1:
-      stimCh = state[1].nonzero()[0]
-      if stimCh.size > 0:
+    if triggersFound > 0:
+      stimCh = state[SharedStates.SenStimChansAnode].nonzero()[0]
+      if stimCh.any():
         #just get first non-zero value
-        chBits = state[1][stimCh[0]]
+        chBits = state[SharedStates.SenStimChansAnode][stimCh[0]]
         self.stimChs.clear()
         chBinary = str("{0:b}".format(chBits))
         for b in range(len(chBinary)): #32 bit state
@@ -428,6 +441,9 @@ class CCEPFilter(GridFilter):
               self.stimChs.append(self.chNames[b]) #append ch name
             else:
               print(f"[WARN] Bit position {b} exceeds available channels ({len(self.chNames)})") #append ch name
+      
+      self.stimFreq = np.median(state[SharedStates.SenStimFreq])
+      print(str(self.stimFreq) + " Hz found")
 
   def update_summary_table(self):
     # grab filters
@@ -1326,7 +1342,11 @@ class CCEPPlot(pg.PlotItem):
       if len(self.link.database) > len(children):
         #update plots with newly computed data (will be true if chunking)
         newPlots = len(self.link.database) - len(children)
-        #print("new plots: " + str(newPlots))
+        if newPlots > 3:
+          print("  Capping new plots. Was: " + str(newPlots))
+          newPlots = 3
+
+        print("New plots: " + str(newPlots))
         for i in range(newPlots):
           self.plot(x = self.p.x, y = self.link.database[-i - 1])
 
