@@ -123,7 +123,7 @@ class TestBooleanParams(ptree.parameterTypes.GroupParameter):
 
     self.addChild({'name': 'View ERNA Dictionary', 'type': 'action'})
     self.p.viewDictButton = self.param('View ERNA Dictionary')
-    self.p.viewDictButton.sigActivated.connect(self.viewDictClicked)
+    self.p.viewDictButton.sigActivated.connect(self.view_dict_clicked)
 
     # Filtering buttons/dropdowns
     param = Parameter.create(name='Filters', type='group', children=[
@@ -152,7 +152,7 @@ class TestBooleanParams(ptree.parameterTypes.GroupParameter):
   def getFilterStim(self):
     return self.filterStim
   
-  def viewDictClicked(self):
+  def view_dict_clicked(self):
     freq = parse_param(self.filterFreq.value())
     amp = parse_param(self.filterAmp.value())
     stim = parse_param(self.filterStim.value())
@@ -230,7 +230,6 @@ class CCEPFilter(GridFilter):
     self.p = ptree.Parameter.create(name="Settings", type='group', children=params, title=None)
     self.t = ptree.ParameterTree()
     self.t.setParameters(self.p)
-
 
     # ── EPOCH CONTROLS ─────────────────────────────────────────────────────
     self.epoch_count = 0
@@ -502,6 +501,28 @@ class CCEPFilter(GridFilter):
     )
 
 
+  def _updateAllAxisLimits(self):
+    # read user settings
+    xmin = self.xMinParam.value()
+    xmax = self.xMaxParam.value()
+    ymin = self.yMinParam.value()
+    ymax = self.yMaxParam.value()
+
+    # 1) update all raw‐data plots
+    #    self.chPlot holds your grid of PlotItems
+    for plotItem in self.chPlot[:self.windows]:
+        vb = plotItem.getViewBox()
+        vb.setXRange(xmin, xmax, padding=0)
+        vb.setYRange(ymin, ymax, padding=0)
+
+    # 2) update any “Average ERNA” plots you’ve left open
+    #    stash avgPlotMap on self when you make it
+    if hasattr(self, 'avgPlotMap'):
+        for p in self.avgPlotMap.values():
+            vb = p.getViewBox()
+            vb.setXRange(xmin, xmax, padding=0)
+            vb.setYRange(ymin, ymax, padding=0)
+
   def plot_average_erna(self, freq_filter, amp_filter, stim_filter):
     """
     For each channel:
@@ -517,7 +538,8 @@ class CCEPFilter(GridFilter):
     sample_count = results[0]['data'].shape[0]
     time_axis = np.linspace(-self.baselineLength, self.ccepLength, sample_count)  # time for each captured epoch
 
-    avgPlotMap = {}
+    self.avgPlotMap = {}
+    avgPlotMap = self.avgPlotMap
 
     avg_dock = Dock("Average ERNA", size=(1, 1), closable=True)
     avg_widget = pg.GraphicsLayoutWidget()
@@ -525,27 +547,30 @@ class CCEPFilter(GridFilter):
     self.area.addDock(avg_dock, position='right', relativeTo=None)
 
     for chName, (row, col) in self._getChannelPositions().items():
-      ch_epochs = [chunk['data'] 
-                    for chunk in results 
-                    if chunk.get('channel') == chName]   # use stored metadata channel name
-      if not ch_epochs:
-          continue
+      ch_epochs = [c['data'] for c in results if c['channel']==chName]
+      if not ch_epochs: continue
 
-      data_array = np.stack(ch_epochs, axis=0)
-      avg = data_array.mean(axis=0)
-      sem = data_array.std(axis=0) / np.sqrt(data_array.shape[0])
+      data_array = np.stack(ch_epochs)
+      avg  = data_array.mean(axis=0)
+      sem  = data_array.std(axis=0)/np.sqrt(data_array.shape[0])
 
-      p = pg.PlotItem(title=f"{chName}\n(n={data_array.shape[0]})")
-      p.plot(time_axis, avg, pen=pg.mkPen('b', width=1.5))
-      upper = p.plot(time_axis, avg + sem, pen=None)
-      lower = p.plot(time_axis, avg - sem, pen=None)
-      fill = pg.FillBetweenItem(upper, lower, brush=(0, 0, 255, 50))
-      p.addItem(fill)
+      p = pg.PlotItem()
+      p.getViewBox().setBackgroundColor(backgroundColor)
+      for ax in ('bottom','left'):
+          a = p.getAxis(ax)
+          a.setPen(pg.mkPen('w'))
+          a.setTextPen(pg.mkPen('w'))
+      p.setTitle(f"{chName}\n(n={data_array.shape[0]})", color='w')
 
-      p.setTitle(f"{chName}\n(n={data_array.shape[0]})")
-      p.setLabel('bottom', 'Time (ms)')
-      p.setLabel('left', 'Amplitude (µV)')
-      p.setYRange(-1000, 1000)
+      # mean trace
+      meanPen = pg.mkPen('w', width=1.5)
+      p.plot(time_axis, avg, pen=meanPen)
+      p.plot(time_axis, avg + sem, pen=pg.mkPen('r', width=1))
+      p.plot(time_axis, avg - sem, pen=pg.mkPen('r', width=1))
+          
+      p.setLabel('bottom', 'Time (ms)', color='#CCCCCC')
+      p.setLabel('left',   'Amplitude (µV)', color='#CCCCCC')
+      p.setYRange(self.yMinParam.value(), self.yMaxParam.value())
 
       avgPlotMap[chName] = p
 
@@ -558,36 +583,40 @@ class CCEPFilter(GridFilter):
 
     # create new dock for this epoch
     dock = Dock(f"Epoch {idx}", closable=True)
+    self.area.addDock(dock, position='right')
 
     container = QtWidgets.QWidget()
     vlayout = QtWidgets.QVBoxLayout(container)
     vlayout.setContentsMargins(2, 2, 2, 2)
     vlayout.setSpacing(2)
-
-    # save button at the top
     saveBtn = QtWidgets.QPushButton("💾 Save Figure")
     vlayout.addWidget(saveBtn)
 
     widget = pg.GraphicsLayoutWidget()
-    self.lastEpochWidget = widget
-    vlayout.addWidget(widget, stretch=1)  # fill remaining space
-
-    # connect button only after widget is created
-    saveBtn.clicked.connect(lambda _, w=widget, i=idx:
-                            self.save_epoch_figure(w, f"epoch_{i}.png"))
+    vlayout.addWidget(widget, stretch=1)
+    saveBtn.clicked.connect(lambda _, w=widget:
+                            self.save_epoch_figure(w, f"epoch_{idx}.png"))
 
     dock.addWidget(container)
-    self.area.addDock(dock, position='right')
 
     for chName, (r, c) in self._getChannelPositions().items():
         data = next((e['data'] for e in chunks if e['channel'] == chName), None)
         if data is None:
             continue
-        p = widget.addPlot(row=r, col=c, title=chName)
-        p.plot(t, data, pen=pg.mkPen(width=1))
-        p.setLabel('bottom', 'Time (ms)')
-        p.setLabel('left', 'Amplitude (µV)')
-        p.setYRange(-600, 600)
+
+        p = widget.addPlot(row=r, col=c)
+        p.getViewBox().setBackgroundColor(backgroundColor)
+
+        for ax in ('bottom', 'left'):
+            a = p.getAxis(ax)
+            a.setPen(pg.mkPen('w'))
+            a.setTextPen(pg.mkPen('w'))
+
+        p.setTitle(chName, color='w')
+        p.plot(t, data, pen=pg.mkPen('w', width=1))
+        p.setLabel('bottom', 'Time (ms)', color='#CCCCCC')
+        p.setLabel('left',   'Amplitude (µV)', color='#CCCCCC')
+        p.setYRange(self.yMinParam.value(), self.yMaxParam.value())
 
     widget.show()
 
@@ -716,6 +745,27 @@ class CCEPFilter(GridFilter):
     self.ccepSamples = self.msToSamples(self.ccepLength)
     self.trigSamples = self._maskEnd 
     self.trigLatLength = self.trigSamples * 1000.0 / self.sr
+
+    gen = self.p.child('General Options')
+    self.xMinParam = gen.addChild({
+        'name': 'X Min (ms)', 'type': 'float',
+        'value': -self.baselineLength
+    })
+    self.xMaxParam = gen.addChild({
+        'name': 'X Max (ms)', 'type': 'float',
+        'value':  self.ccepLength
+    })
+    self.yMinParam = gen.addChild({
+        'name': 'Y Min (µV)', 'type': 'float',
+        'value': -self.p.child('General Options')['View Range'] if 'View Range' in self.p.child('General Options').opts else -600
+    })
+    self.yMaxParam = gen.addChild({
+        'name': 'Y Max (µV)', 'type': 'float',
+        'value':  self.p.child('General Options')['View Range'] if 'View Range' in self.p.child('General Options').opts else 600
+    })
+
+    for param in (self.xMinParam, self.xMaxParam, self.yMinParam, self.yMaxParam):
+        param.sigValueChanged.connect(self._updateAllAxisLimits)
     
     #redefine element size
     self.elements = self.baseSamples + self.ccepSamples
