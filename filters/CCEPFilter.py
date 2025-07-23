@@ -255,8 +255,21 @@ class CCEPFilter(GridFilter):
     self.area.addDock(settingsD)
     self.area.addDock(self.tableDock, position='above', relativeTo=settingsD)
 
-    # ── RAW DATA PLOTS DOCK ────────────────────────────────────────────────
-    self.plotsDock = Dock("Plots", widget=self.gridPlots)
+    # ── RAW DATA & EPOCH TABS DOCK ────────────────────────────────────────
+    # create a tab widget
+    self.plotTabs = QtWidgets.QTabWidget()
+
+    # live CCEP grid tab
+    self.plotTabs.addTab(self.gridPlots, "Live Plots")
+
+    #  placeholder tab for Epoch view
+    self.epochTabContainer = QtWidgets.QWidget()
+    self.epochTabLayout    = QtWidgets.QVBoxLayout(self.epochTabContainer)
+    self.epochTabLayout.setContentsMargins(0,0,0,0)
+    self.plotTabs.addTab(self.epochTabContainer, "Epoch")
+
+    # put the tabs into dock
+    self.plotsDock = Dock("Plots", widget=self.plotTabs)
     self.area.addDock(self.plotsDock, position='above', relativeTo=self.tableDock)
 
     # ── FEATURE SUMMARY DOCK ──────────────────────────────────────────────
@@ -578,47 +591,46 @@ class CCEPFilter(GridFilter):
     avg_widget.show()
 
   def _show_epoch(self, idx, chunks):
-    sample_count = chunks[0]['data'].shape[0]   # time axis
+    for i in reversed(range(self.epochTabLayout.count())):
+        w = self.epochTabLayout.itemAt(i).widget()
+        if w:
+            w.setParent(None)
+
+    label = QtWidgets.QLabel(f"Epoch {idx}")
+    label.setAlignment(QtCore.Qt.AlignCenter)
+    label.setStyleSheet("color: black; font-size: 12pt; font-weight: bold;")
+    self.epochTabLayout.addWidget(label)
+
+    # saveBtn = QtWidgets.QPushButton("💾 Save Figure")
+    # self.epochTabLayout.addWidget(saveBtn)
+
+    epochWidget = pg.GraphicsLayoutWidget()
+    self.epochTabLayout.addWidget(epochWidget, stretch=1)
+    # saveBtn.clicked.connect(lambda _, w=epochWidget:
+    #                         self.save_epoch_figure(w, f"epoch_{idx}.png"))
+
+    sample_count = chunks[0]['data'].shape[0]
     t = np.linspace(-self.baselineLength, self.ccepLength, sample_count)
 
-    # create new dock for this epoch
-    dock = Dock(f"Epoch {idx}", closable=True)
-    self.area.addDock(dock, position='right')
-
-    container = QtWidgets.QWidget()
-    vlayout = QtWidgets.QVBoxLayout(container)
-    vlayout.setContentsMargins(2, 2, 2, 2)
-    vlayout.setSpacing(2)
-    saveBtn = QtWidgets.QPushButton("💾 Save Figure")
-    vlayout.addWidget(saveBtn)
-
-    widget = pg.GraphicsLayoutWidget()
-    vlayout.addWidget(widget, stretch=1)
-    saveBtn.clicked.connect(lambda _, w=widget:
-                            self.save_epoch_figure(w, f"epoch_{idx}.png"))
-
-    dock.addWidget(container)
-
     for chName, (r, c) in self._getChannelPositions().items():
-        data = next((e['data'] for e in chunks if e['channel'] == chName), None)
+        data = next((e['data'] for e in chunks if e['channel']==chName), None)
         if data is None:
             continue
 
-        p = widget.addPlot(row=r, col=c)
+        p = epochWidget.addPlot(row=r, col=c)
         p.getViewBox().setBackgroundColor(backgroundColor)
-
-        for ax in ('bottom', 'left'):
+        for ax in ('bottom','left'):
             a = p.getAxis(ax)
             a.setPen(pg.mkPen('w'))
             a.setTextPen(pg.mkPen('w'))
-
         p.setTitle(chName, color='w')
         p.plot(t, data, pen=pg.mkPen('w', width=1))
-        p.setLabel('bottom', 'Time (ms)', color='#CCCCCC')
-        p.setLabel('left',   'Amplitude (µV)', color='#CCCCCC')
-        p.setYRange(self.yMinParam.value(), self.yMaxParam.value())
+        p.setLabel('bottom','Time (ms)', color='#CCCCCC')
+        p.setLabel('left','Amplitude (µV)', color='#CCCCCC')
+        p.setXRange(self.xMinParam.value(), self.xMaxParam.value(), padding=0)
+        p.setYRange(self.yMinParam.value(), self.yMaxParam.value(), padding=0)
 
-    widget.show()
+    self.plotTabs.setCurrentIndex(1)
 
   def save_epoch_figure(self, widget, filename):
     QtGui.QGuiApplication.processEvents()
