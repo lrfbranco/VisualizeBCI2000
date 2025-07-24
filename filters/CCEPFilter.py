@@ -53,6 +53,31 @@ class SharedStates(IntEnum): # These need to match the States names, shared via 
   SenStimChannel       = auto() # Auto-increment
   SenStimChansAnode    = auto() # Auto-increment
   SenStimChansCathode  = auto() # Auto-increment
+class Frequency(IntEnum):    # replace hard-coded parameters w/ enums
+  FREQ_100 = 100
+  FREQ_130 = 130
+  FREQ_160 = 160
+class Amplitude(Enum):    # don't use IntEnum b/c these are float values
+  AMP_0_5 = 0.5
+  AMP_1_0 = 1.0
+  AMP_1_5 = 1.5
+class StimChannel(IntEnum):
+  CH_1 = 1
+  CH_2  = 2
+  CH_3  = 3
+  CH_4  = 4
+  CH_5  = 5
+  CH_6  = 6
+  CH_7  = 7
+  CH_8  = 8
+  CH_9  = 9
+  CH_10 = 10
+  CH_11 = 11
+  CH_12 = 12
+  CH_13 = 13
+  CH_14 = 14
+  CH_15 = 15
+  CH_16 = 16
 
 #taken from pyqtgraph example
 ## test add/remove
@@ -139,9 +164,9 @@ class TestBooleanParams(ptree.parameterTypes.GroupParameter):
 
     # Filtering buttons/dropdowns
     param = Parameter.create(name='Filters', type='group', children=[
-        {'name': 'Frequency', 'type': 'list', 'limits': ['All', 100, 130, 160], 'value': 'All'},
-        {'name': 'Amplitude', 'type': 'list', 'limits': ['All', 0.5, 1.0, 1.5], 'value': 'All'},
-        {'name': 'Stimulation Channel', 'type': 'list', 'limits': ['All'] + [str(i) for i in range(1,17)], 'value': 'All'},
+        {'name': 'Frequency', 'type': 'list', 'limits': ['All'] + [f.value for f in Frequency], 'value': 'All'},
+        {'name': 'Amplitude', 'type': 'list', 'limits': ['All'] + [a.value for a in Amplitude], 'value': 'All'},
+        {'name': 'Stimulation Channel', 'type': 'list', 'limits': ['All'] + [ch.value for ch in StimChannel], 'value': 'All'},
         {'name': 'Filter Data', 'type': 'action'},
         {'name': 'Plot Average ERNA', 'type': 'action'},
     ])
@@ -700,9 +725,9 @@ class CCEPFilter(GridFilter):
       if chunk:
         # Generate metadata ONCE per stimulation event
         fake_meta = {
-            'amplitude': np.random.choice([0.5, 1.0, 1.5]),
-            'frequency': np.random.choice([100, 130, 160]),
-            'stim_channel': np.random.choice(list(range(1,17))),
+            'frequency': np.random.choice(list(Frequency)),
+            'amplitude': np.random.choice(list(Amplitude)).value,
+            'stim_channel': np.random.choice(list(StimChannel)),
             'trial_id': self.epoch_count
         }
 
@@ -723,11 +748,9 @@ class CCEPFilter(GridFilter):
 
         self.epoch_count += 1
         self.epochDisplay.setValue(self.epoch_count)
-        try:
-           self.epochParam.setLimits([1, self.epoch_count])
-        except Exception:
-           pass
+        self.epochParam.setLimits([1, self.epoch_count])
         self.update_filter_dropdowns()
+        self.update_summary_table()
 
       else:
           for i, ch in enumerate(self.chTable.values()):
@@ -736,11 +759,6 @@ class CCEPFilter(GridFilter):
             if last_peak_idx is not None:
                 ch.last_peak_time = last_peak_idx / self.sr * 1000
             ch.computeFeatures()
-
-      try:
-          self.update_summary_table()
-      except Exception:
-          pass
 
       for ch in self.chTable.values():
           aocs.append(ch.auc)      
@@ -1021,24 +1039,24 @@ class CCEPFilter(GridFilter):
     amp_counts = {}
     stim_counts = {}
 
-    for freq in [100, 130, 160]:
-        results = get_partial({'frequency': freq})
+    for f in Frequency:
+        results = get_partial({'frequency': f})
         if results:
-            freq_counts[freq] = len(set(entry['trial_id'] for entry in results))
+            freq_counts[f] = len(set(entry['trial_id'] for entry in results))
 
-    for amp in [0.5, 1.0, 1.5]:
-        results = get_partial({'amplitude': amp})
+    for a in Amplitude:
+        results = get_partial({'amplitude': a.value})
         if results:
-            amp_counts[amp] = len(set(entry['trial_id'] for entry in results))
+            amp_counts[a] = len(set(entry['trial_id'] for entry in results))
 
-    for stim in range(1, 17):
-        results = get_partial({'stim_channel': stim})
+    for ch in StimChannel:
+        results = get_partial({'stim_channel': ch})
         if results:
-            stim_counts[stim] = len(set(entry['trial_id'] for entry in results))
+            stim_counts[ch] = len(set(entry['trial_id'] for entry in results))
 
-    freq_options = ['All'] + [f"{freq} ({count})" for freq, count in freq_counts.items()]
-    amp_options = ['All'] + [f"{amp} ({count})" for amp, count in amp_counts.items()]
-    stim_options = ['All'] + [f"{stim} ({count})" for stim, count in stim_counts.items()]
+    freq_options = ['All'] + [f"{f.value} ({freq_counts[f]})" for f in Frequency if f in freq_counts]
+    amp_options = ['All'] + [f"{a.value} ({amp_counts[a]})" for a in Amplitude if a in amp_counts]
+    stim_options = ['All'] + [f"{ch.value} ({stim_counts[ch]})" for ch in StimChannel if ch in stim_counts]
 
     freq_param.setLimits(freq_options)
     amp_param.setLimits(amp_options)
