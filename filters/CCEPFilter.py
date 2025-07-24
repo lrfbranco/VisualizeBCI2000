@@ -716,49 +716,50 @@ class CCEPFilter(GridFilter):
 
         #chunk based off artifact
         for i, ch in enumerate(self.chTable.values()):
-          ch.chunkData(data[i], peaks) #chunks and computes
+          #ch.chunkData(data[i], peaks) #chunks and computes
           aocs.append(ch.auc)
       
       # ── 4) Decide between chunked vs continuous processing ──────────────────
       #compute and chunk data
       avgPlots = self.p.child('General Options')['Average CCEPS']
-      if chunk:
+      #if chunk:
         # Generate metadata ONCE per stimulation event
-        fake_meta = {
-            'frequency': np.random.choice(list(Frequency)),
-            'amplitude': np.random.choice(list(Amplitude)).value,
-            'stim_channel': np.random.choice(list(StimChannel)),
-            'trial_id': self.epoch_count
-        }
+      fake_meta = {
+          'frequency': np.random.choice(list(Frequency)),
+          'amplitude': np.random.choice(list(Amplitude)).value,
+          'stim_channel': np.random.choice(list(StimChannel)),
+          'trial_id': self.epoch_count
+      }
 
-        # process all channels
-        for i, ch in enumerate(self.chTable.values()):
-            ch.chunkData(data[i], peaks, avgPlots)
-            last_peak_idx = peaks[-1]
-            ch.last_peak_time = last_peak_idx / self.sr * 1000 # in ms
-            ch.computeFeatures()
+      # process all channels
+      for i, ch in enumerate(self.chTable.values()):
+          ch.computeData(data[i], avgPlots)
+          # ch.chunkData(data[i], peaks, avgPlots)
+          last_peak_idx = peaks[-1]
+          ch.last_peak_time = last_peak_idx / self.sr * 1000 # in ms
+          ch.computeFeatures()
 
-            # build per-chunk metadata
-            meta = fake_meta.copy()
-            meta['channel'] = ch.title if hasattr(ch, 'title') else self.chNames[i]
-            meta['rms']     = ch.rms
-            meta['p2p']     = ch.p2p
-            meta['auc']     = ch.auc
-            add_chunk(ch.data.copy(), meta)
+          # build per-chunk metadata
+          meta = fake_meta.copy()
+          meta['channel'] = ch.title if hasattr(ch, 'title') else self.chNames[i]
+          meta['rms']     = ch.rms
+          meta['p2p']     = ch.p2p
+          meta['auc']     = ch.auc
+          add_chunk(ch.data.copy(), meta)
 
-        self.epoch_count += 1
-        self.epochDisplay.setValue(self.epoch_count)
-        self.epochParam.setLimits([1, self.epoch_count])
-        self.update_filter_dropdowns()
-        self.update_summary_table()
+      self.epoch_count += 1
+      self.epochDisplay.setValue(self.epoch_count)
+      self.epochParam.setLimits([1, self.epoch_count])
+      self.update_filter_dropdowns()
+      self.update_summary_table()
 
-      else:
-          for i, ch in enumerate(self.chTable.values()):
-            ch.computeData(data[i], avgPlots)
-            last_peak_idx = peaks[-1] if peaks is not None else None
-            if last_peak_idx is not None:
-                ch.last_peak_time = last_peak_idx / self.sr * 1000
-            ch.computeFeatures()
+    #else:
+        # for i, ch in enumerate(self.chTable.values()):
+        #   ch.computeData(data[i], avgPlots)
+        #   last_peak_idx = peaks[-1] if peaks is not None else None
+        #   if last_peak_idx is not None:
+        #       ch.last_peak_time = last_peak_idx / self.sr * 1000
+        #   ch.computeFeatures()
 
       for ch in self.chTable.values():
           aocs.append(ch.auc)      
