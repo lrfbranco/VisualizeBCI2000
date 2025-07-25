@@ -288,9 +288,17 @@ class CCEPFilter(GridFilter):
     settingsD.addWidget(self.t)
 
     # ── METRICS TABLE DOCK ─────────────────────────────────────────────────
-    self.tableDock = Dock("Latest Epoch Metrics", widget=self.table)
+    self.metricTabs = QtWidgets.QTabWidget()
+    self.metricTabs.addTab(self.table, "Latest")
+
+    self.epochTabContainerM = QtWidgets.QWidget()
+    self.epochTabLayoutM    = QtWidgets.QVBoxLayout(self.epochTabContainerM)
+    self.epochTabLayoutM.setContentsMargins(0,0,0,0)
+    self.metricTabs.addTab(self.epochTabContainerM, "Epoch")
+
+    self.metricsDock = Dock("Epoch Metrics", widget=self.metricTabs)
     self.area.addDock(settingsD)
-    self.area.addDock(self.tableDock, position='above', relativeTo=settingsD)
+    self.area.addDock(self.metricsDock, position='above', relativeTo=settingsD)
 
     # ── RAW DATA & EPOCH TABS DOCK ────────────────────────────────────────
     # create a tab widget
@@ -307,7 +315,7 @@ class CCEPFilter(GridFilter):
 
     # put the tabs into dock
     self.plotsDock = Dock("Plots", widget=self.plotTabs)
-    self.area.addDock(self.plotsDock, position='above', relativeTo=self.tableDock)
+    self.area.addDock(self.plotsDock, position='above', relativeTo=self.metricsDock)
 
     # ── FEATURE SUMMARY DOCK ──────────────────────────────────────────────
     # add feature summary widget to dock
@@ -384,7 +392,7 @@ class CCEPFilter(GridFilter):
 
     # dock it
     self.summaryDock = Dock("Feature Summary", widget=summaryContainer, closable=False)
-    self.area.addDock(self.summaryDock, position='below', relativeTo=self.tableDock)
+    self.area.addDock(self.summaryDock, position='below', relativeTo=self.metricsDock)
 
     self.update_summary_table()
 
@@ -448,6 +456,7 @@ class CCEPFilter(GridFilter):
   def receiveStates(self, state):
     #get CCEPTriggered state to detect CCEPs
     # print(f"[DEBUG] numTrigs: {self.numTrigs}")   # confirm numTrigs is updating
+    #print("Full state vector:", state[:len(SharedStates)])
     triggersFound = np.count_nonzero(state[SharedStates.CCEPTriggered])
     self.numTrigs += triggersFound
 
@@ -642,16 +651,15 @@ class CCEPFilter(GridFilter):
     label.setStyleSheet("color: black; font-size: 12pt; font-weight: bold;")
     self.epochTabLayout.addWidget(label)
 
-    # saveBtn = QtWidgets.QPushButton("💾 Save Figure")
-    # self.epochTabLayout.addWidget(saveBtn)
-
     epochWidget = pg.GraphicsLayoutWidget()
     self.epochTabLayout.addWidget(epochWidget, stretch=1)
+    # saveBtn = QtWidgets.QPushButton("💾 Save Figure")
+    # self.epochTabLayout.addWidget(saveBtn)
     # saveBtn.clicked.connect(lambda _, w=epochWidget:
     #                         self.save_epoch_figure(w, f"epoch_{idx}.png"))
 
     sample_count = chunks[0]['data'].shape[0]
-    t = np.linspace(-self.baselineLength, self.ccepLength, sample_count)
+    t = np.linspace(-self.baselineLength, self.ccepLength, sample_count)    # time axis
 
     for chName, (r, c) in self._getChannelPositions().items():
         data = next((e['data'] for e in chunks if e['channel']==chName), None)
@@ -671,7 +679,33 @@ class CCEPFilter(GridFilter):
         p.setXRange(self.xMinParam.value(), self.xMaxParam.value(), padding=0)
         p.setYRange(self.yMinParam.value(), self.yMaxParam.value(), padding=0)
 
+    self.epochTabLayoutM.addWidget(label)
+    self.epochTable = QtWidgets.QTableWidget()
+    self.epochTabLayoutM.addWidget(self.epochTable)
+    self.epochTable.setRowCount(self.channels)
+    self.epochTable.setColumnCount(len(Column))
+    self.epochTable.setHorizontalHeaderLabels([c.name for c in Column])
+    self.epochTable.setColumnHidden(Column.Electrode.value, True)
+
+    for row, chunk in enumerate(chunks):
+        # channel name
+        name_item = QtWidgets.QTableWidgetItem(chunk['channel'])
+        self.epochTable.setItem(row, Column.Name.value, name_item)
+
+        # significance flag
+        sig_val = int(chunk['auc'] > self.aucThresh)
+        sig_item = QtWidgets.QTableWidgetItem(str(sig_val))
+        self.epochTable.setItem(row, Column.Sig.value, sig_item)
+
+        # auc, rms, p2p
+        for col_enum, key in [(Column.AUC, 'auc'), (Column.RMS, 'rms'), (Column.P2P, 'p2p')]:
+            val = int(chunk.get(key, 0))
+            item = QtWidgets.QTableWidgetItem(str(val))
+            self.epochTable.setItem(row, col_enum.value, item)
+
+    self.epochTable.resizeColumnsToContents()
     self.plotTabs.setCurrentIndex(1)
+    self.metricTabs.setCurrentIndex(1)
 
   def save_epoch_figure(self, widget, filename):
     QtGui.QGuiApplication.processEvents()
