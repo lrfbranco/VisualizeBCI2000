@@ -274,7 +274,7 @@ class CCEPFilter(GridFilter):
     self.epochDisplay = self.p.param('Epoch Count')
     self.epochDisplay.setValue(self.epoch_count)
 
-    self.p.addChild({'name': 'Select Epoch', 'type': 'int', 'value': 0, 'limits': [0,0]})
+    self.p.addChild({'name': 'Select Epoch', 'type': 'list', 'value': 'None', 'limits': ['None']})
     self.epochParam = self.p.param('Select Epoch')
     self.p.addChild({'name': 'Plot Selected Epoch', 'type': 'action'})
     self.plotEpochBtn = self.p.param('Plot Selected Epoch')
@@ -397,7 +397,7 @@ class CCEPFilter(GridFilter):
     self.update_summary_table()
 
   def plot_selected_epoch(self):
-    idx = self.epochParam.value()
+    idx = int((self.epochParam.value()).split()[0])
     # grab all stored chunks
     all_chunks = get_partial({})  # empty query returns everything
     # manually filter by trial_id
@@ -758,6 +758,8 @@ class CCEPFilter(GridFilter):
       avgPlots = self.p.child('General Options')['Average CCEPS']
       #if chunk:
         # Generate metadata ONCE per stimulation event
+      self.epoch_count += 1
+      self.epochDisplay.setValue(self.epoch_count)
       fake_meta = {
           'frequency': np.random.choice(list(Frequency)),
           'amplitude': np.random.choice(list(Amplitude)).value,
@@ -781,9 +783,17 @@ class CCEPFilter(GridFilter):
           meta['auc']     = ch.auc
           add_chunk(ch.data.copy(), meta)
 
-      self.epoch_count += 1
-      self.epochDisplay.setValue(self.epoch_count)
-      self.epochParam.setLimits([1, self.epoch_count])
+      all_chunks = get_partial({})
+      trial_ids = sorted({c['trial_id'] for c in all_chunks})
+      labels = ['None']
+      for tid in trial_ids:
+          meta = next(c for c in all_chunks if c['trial_id']==tid)
+          f   = int(meta['frequency'])
+          a   = float(meta['amplitude']) 
+          s   = int(meta['stim_channel'])
+          labels.append(f"{tid} ({f} Hz, {a:.1f} mA, {s})")
+
+      self.epochParam.setLimits(labels)
       self.update_filter_dropdowns()
       self.update_summary_table()
 
