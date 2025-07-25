@@ -169,6 +169,7 @@ class TestBooleanParams(ptree.parameterTypes.GroupParameter):
         {'name': 'Stimulation Channel', 'type': 'list', 'limits': ['All'] + [ch.value for ch in StimChannel], 'value': 'All'},
         {'name': 'Filter Data', 'type': 'action'},
         {'name': 'Plot Average ERNA', 'type': 'action'},
+        {'name': 'Add Query Summary','type': 'action'},
     ])
     self.addChild(param)
 
@@ -177,9 +178,11 @@ class TestBooleanParams(ptree.parameterTypes.GroupParameter):
     self.filterStim = self.param('Filters', 'Stimulation Channel')
     self.filterButton = self.param('Filters', 'Filter Data')
     self.plotAvg = self.param('Filters', 'Plot Average ERNA')
+    self.qSum = self.param('Filters', 'Add Query Summary')
 
     self.filterButton.sigActivated.connect(self.local_filter_data)  # connect button to filter function
     self.plotAvg.sigActivated.connect(self.plot_avg_clicked)
+    self.qSum.sigActivated.connect(self.qSum_clicked)
 
   # maybe these can be removed for redundancy with local_filter_data ???
   def getFilterFreq(self):
@@ -189,23 +192,23 @@ class TestBooleanParams(ptree.parameterTypes.GroupParameter):
   def getFilterStim(self):
     return self.filterStim
   
+  def get_params(self):
+      freq = parse_param(self.filterFreq.value())
+      amp  = parse_param(self.filterAmp.value())
+      stim = parse_param(self.filterStim.value())
+      return freq, amp, stim
   def view_dict_clicked(self):
-    freq = parse_param(self.filterFreq.value())
-    amp = parse_param(self.filterAmp.value())
-    stim = parse_param(self.filterStim.value())
-    self.p.view_ERNA_dict(freq_filter=freq, amp_filter=amp, stim_filter=stim)
-
+      freq, amp, stim = self.get_params()
+      self.p.view_ERNA_dict(freq_filter=freq, amp_filter=amp, stim_filter=stim)
   def local_filter_data(self):
-    freq = parse_param(self.filterFreq.value())
-    amp = parse_param(self.filterAmp.value())
-    stim = parse_param(self.filterStim.value())
-    self.p.filter_data(freq, amp, stim)
-  
+      freq, amp, stim = self.get_params()
+      self.p.filter_data(freq, amp, stim)
   def plot_avg_clicked(self):
-    freq = parse_param(self.filterFreq.value())
-    amp = parse_param(self.filterAmp.value())
-    stim = parse_param(self.filterStim.value())
-    self.p.plot_average_erna(freq_filter=freq, amp_filter=amp, stim_filter=stim)
+      freq, amp, stim = self.get_params()
+      self.p.plot_average_erna(freq_filter=freq, amp_filter=amp, stim_filter=stim)
+  def qSum_clicked(self):
+      freq, amp, stim = self.get_params()
+      self.p.add_query_summary(f=freq, a=amp, s=stim)
 
   def holdPlotsChanged(self, newValue):
     self.p._holdPlots = newValue
@@ -381,11 +384,25 @@ class CCEPFilter(GridFilter):
         ])
         layout.addWidget(tbl_s, 1)
 
-        return w, tbl_f, tbl_a, tbl_s
+        queryLabel = QtWidgets.QLabel("Query Summary")
+        queryLabel.setFont(font)
+        queryLabel.setStyleSheet("color: black;")
+        layout.addWidget(queryLabel)
+
+        tbl_q = QtWidgets.QTableWidget()
+        tbl_q.setColumnCount(5)
+        tbl_q.setHorizontalHeaderLabels([
+            f"{name} – Query", "nEpochs",
+            "Mean AUC", "Mean P2P", "Mean RMS"
+        ])
+        tbl_q.setRowCount(0)
+        layout.addWidget(tbl_q, 1)
+
+        return w, tbl_f, tbl_a, tbl_s, tbl_q
 
     # build both tabs
-    leftTab,  self.freqLeftTable,  self.ampLeftTable,  self.stimLeftTable  = _makeHemisphereTab("Left")
-    rightTab, self.freqRightTable, self.ampRightTable, self.stimRightTable = _makeHemisphereTab("Right")
+    leftTab,  self.freqLeftTable,  self.ampLeftTable,  self.stimLeftTable, self.queryLeftTable  = _makeHemisphereTab("Left")
+    rightTab, self.freqRightTable, self.ampRightTable, self.stimRightTable, self.queryRightTable = _makeHemisphereTab("Right")
 
     tabs.addTab(leftTab,  "Left")
     tabs.addTab(rightTab, "Right")
@@ -509,12 +526,12 @@ class CCEPFilter(GridFilter):
         tbl.verticalHeader().setVisible(False)
         for row, k in enumerate(keys):
             group = grouping[k]
-            rms  = np.array([e['rms']  for e in group])
-            p2p  = np.array([e['p2p'] for e in group])
-            auc  = np.array([e['auc'] for e in group])
+            m = self.compute_metrics(group)
+
             cells = [
                 str(k),
-                f"{auc.mean():.2f}", f"{p2p.mean():.2f}", f"{rms.mean():.2f}", f"{rms.min():.2f}", f"{rms.max():.2f}"
+                f"{m['mean_auc']:.2f}", f"{m['mean_p2p']:.2f}", f"{m['mean_rms']:.2f}",
+                f"{m['min_rms']:.2f}", f"{m['max_rms']:.2f}",
             ]
             for col, txt in enumerate(cells):
                 item = QtWidgets.QTableWidgetItem(txt)
@@ -522,7 +539,7 @@ class CCEPFilter(GridFilter):
                     font = item.font()
                     font.setBold(True)
                     item.setFont(font)
-                if col>0:
+                else:
                     item.setTextAlignment(QtCore.Qt.AlignRight|QtCore.Qt.AlignVCenter)
                 tbl.setItem(row, col, item)
         tbl.resizeColumnsToContents()
@@ -563,28 +580,31 @@ class CCEPFilter(GridFilter):
         _group_by(right, 'stim_channel')
     )
 
+  def compute_metrics(self, group):
+    trial_ids = {e['trial_id'] for e in group}
+    n = len(trial_ids)
+    # if empty, return zeros
+    if not group:
+        return {'n': n, **{k: 0.0 for k in ('mean_auc','mean_p2p','mean_rms','min_rms','max_rms')}}
+    aucs = np.array([e['auc']  for e in group])
+    p2ps = np.array([e['p2p'] for e in group])
+    rms  = np.array([e['rms']  for e in group])
+    return {
+        'n':        n, 'mean_auc': aucs.mean(), 'mean_p2p': p2ps.mean(),
+        'mean_rms': rms.mean(), 'min_rms':  rms.min(), 'max_rms':  rms.max(),
+    }
 
-  def _updateAllAxisLimits(self):
+  def _updateAxisLimits(self):
     # read user settings
     xmin = self.xMinParam.value()
     xmax = self.xMaxParam.value()
     ymin = self.yMinParam.value()
     ymax = self.yMaxParam.value()
 
-    # 1) update all raw‐data plots
-    #    self.chPlot holds your grid of PlotItems
     for plotItem in self.chPlot[:self.windows]:
         vb = plotItem.getViewBox()
         vb.setXRange(xmin, xmax, padding=0)
         vb.setYRange(ymin, ymax, padding=0)
-
-    # 2) update any “Average ERNA” plots you’ve left open
-    #    stash avgPlotMap on self when you make it
-    if hasattr(self, 'avgPlotMap'):
-        for p in self.avgPlotMap.values():
-            vb = p.getViewBox()
-            vb.setXRange(xmin, xmax, padding=0)
-            vb.setYRange(ymin, ymax, padding=0)
 
   def plot_average_erna(self, freq_filter, amp_filter, stim_filter):
     """
@@ -597,6 +617,9 @@ class CCEPFilter(GridFilter):
     if not results:
       print("No matching epochs found.")
       return
+    
+    trial_ids = sorted({entry['trial_id'] for entry in results})
+    self.logPrint(f"Averaging ERNA over epochs: {trial_ids}")
     
     sample_count = results[0]['data'].shape[0]
     time_axis = np.linspace(-self.baselineLength, self.ccepLength, sample_count)  # time for each captured epoch
@@ -639,6 +662,41 @@ class CCEPFilter(GridFilter):
 
     self._applyLayout(avg_widget, avgPlotMap)
     avg_widget.show()
+
+  def add_query_summary(self, f, a, s):
+      parts = []
+      if f is not None: parts.append(f"{f} Hz")
+      if a is not None:  parts.append(f"{a:.1f} mA")
+      if s is not None: parts.append(f"Ch {s}")
+      query_label = ", ".join(parts) or "All"
+
+      results = self.filter_data(f, a, s)
+
+      left_group  = [e for e in results if e['channel'].endswith('_L')]
+      right_group = [e for e in results if e['channel'].endswith('_R')]
+
+      L = self.compute_metrics(left_group)
+      R = self.compute_metrics(right_group)
+
+      row = self.queryLeftTable.rowCount()
+      self.queryLeftTable.insertRow(row)
+      left_vals = [
+          query_label,
+          str(L['n']), f"{L['mean_auc']:.2f}", f"{L['mean_p2p']:.2f}", f"{L['mean_rms']:.2f}",
+      ]
+      for col, txt in enumerate(left_vals):
+          item = QtWidgets.QTableWidgetItem(txt)
+          self.queryLeftTable.setItem(row, col, item)
+
+      row = self.queryRightTable.rowCount()
+      self.queryRightTable.insertRow(row)
+      right_vals = [
+          query_label,
+          str(R['n']), f"{R['mean_auc']:.2f}", f"{R['mean_p2p']:.2f}", f"{R['mean_rms']:.2f}",
+      ]
+      for col, txt in enumerate(right_vals):
+          item = QtWidgets.QTableWidgetItem(txt)
+          self.queryRightTable.setItem(row, col, item)
 
   def _show_epoch(self, idx, chunks):
     for i in reversed(range(self.epochTabLayout.count())):
@@ -856,7 +914,7 @@ class CCEPFilter(GridFilter):
     })
 
     for param in (self.xMinParam, self.xMaxParam, self.yMinParam, self.yMaxParam):
-        param.sigValueChanged.connect(self._updateAllAxisLimits)
+        param.sigValueChanged.connect(self._updateAxisLimits)
     
     #redefine element size
     self.elements = self.baseSamples + self.ccepSamples
