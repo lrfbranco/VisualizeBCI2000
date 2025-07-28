@@ -39,28 +39,36 @@ class Column(Enum):
   Electrode = 1
   Sig = 2
   AUC = 3
-  RMS = 4
-  P2P = 5
+RMS = 4
+P2P = 5
+
+class RefCombo(Enum):
+  Average = 0
+  Maximum = 1
+
 class SharedStates(IntEnum): # These need to match the States names, shared via "ShareCCEPFilterStates" parameter
   CCEPTriggered        = 0
   StimulatingChannel   = auto() # Auto-increment
-  SenStimConnected     = auto() # Auto-increment
-  SenStimTriggered     = auto() # Auto-increment
-  SenStimEndBurst      = auto() # Auto-increment
-  SenStimAmpli         = auto() # Auto-increment
-  SenStimAmpli_dec     = auto() # Auto-increment
-  SenStimFreq          = auto() # Auto-increment
-  SenStimChannel       = auto() # Auto-increment
-  SenStimChansAnode    = auto() # Auto-increment
-  SenStimChansCathode  = auto() # Auto-increment
+  SenStimConnected     = auto()
+  SenStimTriggered     = auto()
+  SenStimEndBurst      = auto()
+  SenStimAmpli         = auto()
+  SenStimAmpli_dec     = auto()
+  SenStimFreq          = auto()
+  SenStimChannel       = auto()
+  SenStimChansAnode    = auto()
+  SenStimChansCathode  = auto()
+
 class Frequency(IntEnum):    # replace hard-coded parameters w/ enums
   FREQ_100 = 100
   FREQ_130 = 130
   FREQ_160 = 160
+
 class Amplitude(Enum):    # don't use IntEnum b/c these are float values
   AMP_0_5 = 0.5
   AMP_1_0 = 1.0
   AMP_1_5 = 1.5
+
 class StimChannel(IntEnum):
   CH_1 = 1
   CH_2  = 2
@@ -79,44 +87,97 @@ class StimChannel(IntEnum):
   CH_15 = 15
   CH_16 = 16
 
-#taken from pyqtgraph example
-## test add/remove
-## this group includes a menu allowing the user to add new parameters into its child list
-class ScalableGroup(ptree.parameterTypes.GroupParameter):
-    def __init__(self, p, **opts):
-        opts['type'] = 'group'
-        opts['addText'] = "Add"
-        opts['addList'] = ['str', 'float', 'int']
-        ptree.parameterTypes.GroupParameter.__init__(self, **opts)
-        self.p = p
+class FigureParameterItem(ptree.parameterTypes.WidgetParameterItem):
+  def makeWidget(self):
+    self.asSubItem = True  # places it in 2nd column
+    w = pg.PlotWidget(title="Detection Output")
+    w.setMinimumSize(100, 100)
+    w.sigChanged = w.sigRangeChanged 
+    w.value = w.getPlotItem
+    w.setValue = w.setCentralItem
+    self.hideWidget = False
+    return w
 
-        #enable/disable
-        self.addChild({'name': 'Enable auto-detection', 'type': 'bool', 'value': 0})
-        self.a = self.param('Enable auto-detection')
-        self.a.sigValueChanged.connect(self.aChanged)
-        #reference channel
-        self.addChild({'name': 'Detection channel', 'type': 'str', 'value': "2", 'tip': 'Index or name'})
-        self.b = self.param('Detection channel')
-        self.b.sigValueChanged.connect(self.aChanged)
-        self._dbsLayout = False # initialize DBS layout to unchecked
-    def aChanged(self):
-      self.p.setAutoDetect(self.a.value())
-    def bChanged(self):
-      self.p.setDetectChannels(self.b.value())
-    
-    def addNew(self, typ):
-        val = {
-            'str': '',
-            'float': 0.0,
-            'int': 0
-        }[typ]
-        self.addChild(dict(name="ScalableParam %d" % (len(self.childs)+1), type=typ, value=val, removable=True, renamable=True))
+class FigureParameter(ptree.Parameter):
+  itemClass = FigureParameterItem
+  def __init__(self, **opts):
+    super().__init__(**opts)
+
+class ScalableGroup(ptree.parameterTypes.GroupParameter):
+  def __init__(self, p, **opts):
+    opts['type'] = 'group'
+    ptree.parameterTypes.GroupParameter.__init__(self, **opts)
+    self.p = p
+
+    # enable/disable
+    self.addChild({'name': 'Enable auto-detection', 'type': 'bool', 'value': 0})
+    self.a = self.param('Enable auto-detection')
+    self.a.sigValueChanged.connect(self.aChanged)
+
+    # reference channel (roxana's version)
+    self.addChild({'name': 'Detection channel', 'type': 'str', 'value': "2", 'tip': 'Index or name'})
+    self.b = self.param('Detection channel')
+    self.b.sigValueChanged.connect(self.bChanged)
+
+    # choose detection channel behavior (Will’s version)
+    chOptionsList = ptree.parameterTypes.ListParameter(name='Combination Options', limits=[opt.name for opt in RefCombo])
+    self.addChild(chOptionsList)
+    self.c = chOptionsList
+    self.c.sigValueChanged.connect(self.cChanged)
+
+    # custom fig param (Will’s version)
+    ptree.registerParameterType("fig", FigureParameter)
+    self.fig  = FigureParameter(name="Peak Detection Plot")
+    self.addChild(self.fig)
+
+    # text box for displaying selected channels
+    self.selTextBox = ptree.parameterTypes.TextParameter(name='Selected Channels', readonly=True)
+    self.addChild(self.selTextBox)
+
+    # checklist for detection channels
+    self.chGroup = ptree.parameterTypes.ChecklistParameter(name='Detection Channels')
+    self.addChild(self.chGroup)
+    self.chGroup.sigValueChanging.connect(self.checkChanged)
+    self.chGroup.sigValueChanged.connect(self.checkChanged)
+    self.chList = []
+
+    # DBS layout flag (roxana's version)
+    self._dbsLayout = False
+
+  # callback functions
+  def aChanged(self):
+    self.p.setAutoDetect(self.a.value())
+
+  def bChanged(self):
+    self.p.setDetectChannels(self.b.value())
+
+  def cChanged(self):
+    self.p.setRefChOptions(self.c.value())
+
+  def checkChanged(self, val, ev):
+    if self.chList != ev:
+      self.chList = ev
+      if len(ev) > 0:
+        listStr = ev[0]
+        for el in ev[1:]:
+          listStr += ", " + str(el)
+      else:
+        listStr = ""
+      self.selTextBox.setValue(listStr)
+
+  # # optional method
+  # def addNew(self, typ):
+  #   val = {
+  #     'str': '',
+  #     'float': 0.0,
+  #     'int': 0
+  #   }[typ]
+  #   self.addChild(dict(name="ScalableParam %d" % (len(self.childs) + 1), type=typ, value=val, removable=True, renamable=True))
+
 
 class TestBooleanParams(ptree.parameterTypes.GroupParameter):
   def __init__(self, p, **opts):
     self.p = p
-    #opts['type'] = 'bool'
-    #opts['value'] = True
     ptree.parameterTypes.GroupParameter.__init__(self, **opts)
     self.addChild({'name': 'Sort channels', 'type': 'bool', 'value': 0})
     self.a = self.param('Sort channels')
@@ -262,9 +323,10 @@ class CCEPFilter(GridFilter):
     settingsLab = QtWidgets.QLabel("Settings", objectName="h1")
 
     #create parameter tree
+    self.autoParam = ScalableGroup(name="Auto Detect Options", p=self, tip='Click to add channels', readonly=False)
     params = [
         TestBooleanParams(name= 'General Options', p=self, showTop=False),
-        ScalableGroup(name="Auto Detect Options", p=self, tip='Click to add channels'),
+        self.autoParam
     ]
 
     self.p = ptree.Parameter.create(name="Settings", type='group', children=params, title=None)
@@ -286,7 +348,6 @@ class CCEPFilter(GridFilter):
     #self.t.setParameters(params)
     #self.t.resizeColumnToContents(0)
     self.t.header().setSectionResizeMode(pg.QtWidgets.QHeaderView.Stretch)
-    #self.t.show()
     settingsD.addWidget(settingsLab)
     settingsD.addWidget(self.t)
 
@@ -442,8 +503,6 @@ class CCEPFilter(GridFilter):
     self._maskEnd = self.settings.value("maskEnd", 15)
 
     pState = self.settings.value("pState", {})
-    # if hasattr(pState, 'children'):
-    #   children = pState['children']
 
     if pState != {}:
       self.p.restoreState(pState, addChildren=False, removeChildren=False)
@@ -452,12 +511,18 @@ class CCEPFilter(GridFilter):
     self._trigCh = self.p.child('Auto Detect Options')['Detection channel']
     self.epoch_count = 0
     self.epochDisplay.setValue(self.epoch_count)    # set epoch count to zero upon restarting GUI
+    self._comboOpt = RefCombo[self.p.child('Auto Detect Options')['Combination Options']]
 
   def saveSettings(self):
     super().saveSettings()
 
     self.settings.setValue("maskStart", self._maskStart)
-    self.settings.setValue("maskEnd", self._maskEnd) 
+    self.settings.setValue("maskEnd", self._maskEnd)
+    #delete detection graph before saving
+    try:
+      self.autoParam.fig.remove()
+    except:
+      pass
     self.settings.setValue("pState", self.p.saveState())
 
   #an attempt to abstract plotting from BCI2000
@@ -478,23 +543,20 @@ class CCEPFilter(GridFilter):
     self.numTrigs += triggersFound
 
     #find stim ch if possible
-    if triggersFound > 0:
-      stimCh = state[SharedStates.SenStimChansAnode].nonzero()[0]
+    if np.shape(state)[0] > 1 and triggersFound:
+      stimCh = state[SharedStates.StimulatingChannel].nonzero()[0]
       if stimCh.any():
         #just get first non-zero value
-        chBits = state[SharedStates.SenStimChansAnode][stimCh[0]]
-        self.stimChs.clear()
-        chBinary = str("{0:b}".format(chBits))
+        chBits = state[SharedStates.StimulatingChannel][stimCh[0]]
+        testStimChs = []
+        chBinary = '{0:08b}'.format(chBits)
         for b in range(len(chBinary)): #32 bit state
           if chBinary[len(chBinary) - b - 1] == '1':
             #print(self.chNames[b] + " at " + str(b))
-            if b < len(self.chNames):
-              self.stimChs.append(self.chNames[b]) #append ch name
-            else:
-              print(f"[WARN] Bit position {b} exceeds available channels ({len(self.chNames)})") #append ch name
-      
-      self.stimFreq = np.median(state[SharedStates.SenStimFreq])
-      print(str(self.stimFreq) + " Hz found")
+            testStimChs.append(self.chNames[b]) #append ch name
+        #minimally change used array
+        if testStimChs != self.stimChs:
+          self.stimChs = testStimChs
 
   def update_summary_table(self):
     # grab filters
@@ -783,33 +845,61 @@ class CCEPFilter(GridFilter):
       self.numTrigs -= 1
 
     # ── 2) Initialize per-epoch containers ─────────────────────────────────
-      aocs = []     # collects AUCs across channels
-      chunk = False # flag: did we detect a valid stimulation artifact?
-      peaks = None  # indices of detected peaks
+    aocs = []     # collects AUCs across channels
+    chunk = False # flag: did we detect a valid stimulation artifact?
+    peaks = None  # indices of detected peaks
 
     # ── 3) Trigger‐channel artifact detection ───────────────────────────────
-      if self.p.child('Auto Detect Options')['Detection channel']:
-        #trigCh = self.p.child('General Options')['Sort channels']
-        #get channel to use as trigger
+    if self.p.child('Auto Detect Options')['Enable auto-detection']:
+      refIndices = []
+
+      if not self.autoParam.chList:
         try:
+          # fallback to single detection channel (your old method)
           chIndex = int(self._trigCh)
         except ValueError:
           try:
-            #not index, gotta be ch name
             chIndex = self.chNames.index(self._trigCh)
           except:
             self.logPrint(self._trigCh + " is not a valid channel name")
             chIndex = 1
-        self.trigData = data[chIndex - 1] #convert to 0-based, retreive last channel (trigger channel)
+        refIndices = [chIndex - 1]  # convert to 0-based index
+      else:
+        try:
+          refIndices = [self.chNames.index(ch) for ch in self.autoParam.chList]
+        except:
+          self.logPrint("Detection chs have an invalid channel name")
+          refIndices = []
 
-        peaks, properties = find_peaks(self.trigData, 1, distance=1)    # changed values for testing
-        chunk = len(peaks) >= 1       # our data has only one peak, so consider it
-        # print(f"Found {len(peaks)} peaks") # TEMPORARILY DISABLE FOR TESTING
+      if len(refIndices) == 0:
+        self.logPrint("Cannot auto-detect without valid Detection Channels specified!")
+      else:
+        # Combine channels
+        if self._comboOpt == RefCombo.Average:
+          self.trigData =  np.mean(data[refIndices, :], axis=0)
+        elif self._comboOpt == RefCombo.Maximum:
+          self.trigData = np.max(data[refIndices, :], axis=0)
 
-        #chunk based off artifact
-        for i, ch in enumerate(self.chTable.values()):
-          #ch.chunkData(data[i], peaks) #chunks and computes
-          aocs.append(ch.auc)
+        # Detrend before peak detection
+        self.trigData -= np.mean(self.trigData)
+
+        peaks, properties = find_peaks(self.trigData, 200, width=(None, 20), threshold=20, distance=20)
+        print(f"Found {len(peaks)} peaks")
+        chunk = len(peaks) > 1
+
+        # Plot detection output
+        pltItem = self.autoParam.fig.value()
+        pltItem.clear()
+        for peak in peaks:
+          pltItem.addLine(x=self.detectX[peak], pen={'color': "#d94350", 'width': 3})
+        pltItem.plot(x=self.detectX, y=self.trigData)
+        self.autoParam.fig.setValue(pltItem)
+
+    # Apply AUC extraction regardless of detection logic
+    for i, ch in enumerate(self.chTable.values()):
+      # ch.chunkData(data[i], peaks)  # if this is commented out for a reason, leave it
+      aocs.append(ch.auc)
+
       
       # ── 4) Decide between chunked vs continuous processing ──────────────────
       #compute and chunk data
@@ -867,7 +957,7 @@ class CCEPFilter(GridFilter):
           aocs.append(ch.auc)      
       self.dataProcessedSignal.emit(aocs)   #send processed data
 
-      #we scale by 10 cause slider can only do ints
+      #set threshold
       stds = self.p.child('General Options')['Threshold (STD)']
       self.aucThresh = np.std(aocs) * stds
 
@@ -992,6 +1082,24 @@ class CCEPFilter(GridFilter):
     #self.table.itemClicked.connect(self.tableItemClickedCallback)
     self.table.itemSelectionChanged.connect(self._selectionChanged)
     #self.table.itemChanged.connect(self._itemChanged)
+
+    #set parameter tree
+    self.autoParam.chGroup.setLimits(self.chNames)
+    #set detection plot with settings
+    pltItem = self.autoParam.fig.value()
+    #prepare view
+    axView = pltItem.getViewBox()
+    axView.disableAutoRange()
+    #axView.setMouseEnabled(x=False, y=True)
+    axView.setDefaultPadding(0)
+    xLim = self.getParameterValue("PreStimLength")
+    yLim = self.getParameterValue("PostStimLength")
+    #redefine element size
+    self.detectX = np.linspace(-xLim, yLim, self.msToSamples(xLim) + self.msToSamples(yLim))
+    axView.setXRange(-xLim, yLim, padding=0)
+    axView.setYRange(-1000, 1000)
+    #set it back after adjustments
+    self.autoParam.fig.setValue(pltItem)
 
   def setStdDevState(self, value):
     self._stds = value
@@ -1180,10 +1288,8 @@ class CCEPFilter(GridFilter):
     self._saveFigs = state
   def setAutoDetect(self, state):
     self._autoDetect = state
-    #self.trigChForm.setReadOnly(not state)
-  def setDetectChannels(self, text):
-    print(text)
-    self._trigCh = text
+  def setRefChOptions(self, val):
+    self._comboOpt = RefCombo[val]
       
   def msToSamples(self, lengthMs):
     return int(ceil(lengthMs * self.sr/1000.0))
@@ -1538,8 +1644,11 @@ class CCEPCalc():
       #stdBase = np.std(self.rawData[:self.p.baseSamples], dtype=np.float64)
       self.data = np.subtract(newData, avBase)
 
-    #store data
-    self.database.append(self.data.copy())
+    if np.shape(self.data) != np.shape(self.p.x):
+      self.p.logPrint(f"Expected: {np.shape(self.p.x)}, received: {np.shape(self.data)}")
+    else:
+      #store data
+      self.database.append(self.data.copy())
 
     #possibly change to average, before we detect ccep
     if avgPlots:
