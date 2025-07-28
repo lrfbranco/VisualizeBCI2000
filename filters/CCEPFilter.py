@@ -39,8 +39,8 @@ class Column(Enum):
   Electrode = 1
   Sig = 2
   AUC = 3
-RMS = 4
-P2P = 5
+  RMS = 4
+  P2P = 5
 
 class RefCombo(Enum):
   Average = 0
@@ -557,6 +557,9 @@ class CCEPFilter(GridFilter):
         #minimally change used array
         if testStimChs != self.stimChs:
           self.stimChs = testStimChs
+      
+      self.stimFreq = np.median(state[SharedStates.SenStimFreq])
+      print(str(self.stimFreq) + " Hz found")
 
   def update_summary_table(self):
     # grab filters
@@ -837,6 +840,60 @@ class CCEPFilter(GridFilter):
     else:
         self.logPrint(f"Error: could not save figure to {filename}")
 
+  def detect_artifacts(self, data):
+    """
+    WILL'S VERSION OF PLOT!!!!!!
+
+    Runs the auto-detection block and returns:
+      peaks: list of detected peak indices
+      aocs:  collected AUCs from channels (old chunk logic)
+      chunk: bool flag (True if peaks>1)
+    """
+    aocs = []
+    chunk = False
+    peaks = []
+
+    if self.p.child('Auto Detect Options')['Enable auto-detection']:
+        # --- begin existing block ---
+        refIndices = []
+        if not self.autoParam.chList:
+            self.logPrint("Cannot auto-detect peaks without a detection channel!")
+        else:
+            try:
+                for ch in self.autoParam.chList:
+                    refIndices.append(self.chNames.index(ch))
+            except:
+                self.logPrint("Detection channels list contains an invalid name")
+            if refIndices:
+                # combine & detrend
+                if self._comboOpt == RefCombo.Average:
+                    self.trigData = np.mean(data[refIndices, :], axis=0)
+                else:
+                    self.trigData = np.max(data[refIndices, :], axis=0)
+                self.trigData -= np.mean(self.trigData)
+
+                # build x‐axis
+                self.detectX = np.arange(len(self.trigData))
+
+                # find peaks
+                peaks, _ = find_peaks(self.trigData,
+                                      threshold=20,
+                                      distance=20,
+                                      width=(None,20))
+                chunk = len(peaks) > 1
+
+                # draw the little detection plot
+                pltItem = self.autoParam.fig.value()
+                pltItem.clear()
+                pltItem.plot(self.detectX, self.trigData)
+                for pk in peaks:
+                    pltItem.addLine(x=self.detectX[pk],
+                                    pen={'color': "#d94350","width":3})
+                self.autoParam.fig.setValue(pltItem)
+        # --- end existing block ---
+
+    return peaks, aocs, chunk
+
   def plot(self, data):
     # ── 1) Check for new triggers ───────────────────────────────────────────
     #if self.checkPlot():
@@ -845,61 +902,33 @@ class CCEPFilter(GridFilter):
       self.numTrigs -= 1
 
     # ── 2) Initialize per-epoch containers ─────────────────────────────────
-    aocs = []     # collects AUCs across channels
-    chunk = False # flag: did we detect a valid stimulation artifact?
-    peaks = None  # indices of detected peaks
+      aocs = []     # collects AUCs across channels
+      chunk = False # flag: did we detect a valid stimulation artifact?
+      peaks = None  # indices of detected peaks
 
     # ── 3) Trigger‐channel artifact detection ───────────────────────────────
-    if self.p.child('Auto Detect Options')['Enable auto-detection']:
-      refIndices = []
-
-      if not self.autoParam.chList:
+      if self.p.child('Auto Detect Options')['Detection channel']:
+        #trigCh = self.p.child('General Options')['Sort channels']
+        #get channel to use as trigger
         try:
-          # fallback to single detection channel (your old method)
           chIndex = int(self._trigCh)
         except ValueError:
           try:
+            #not index, gotta be ch name
             chIndex = self.chNames.index(self._trigCh)
           except:
             self.logPrint(self._trigCh + " is not a valid channel name")
             chIndex = 1
-        refIndices = [chIndex - 1]  # convert to 0-based index
-      else:
-        try:
-          refIndices = [self.chNames.index(ch) for ch in self.autoParam.chList]
-        except:
-          self.logPrint("Detection chs have an invalid channel name")
-          refIndices = []
+        self.trigData = data[chIndex - 1] #convert to 0-based, retreive last channel (trigger channel)
 
-      if len(refIndices) == 0:
-        self.logPrint("Cannot auto-detect without valid Detection Channels specified!")
-      else:
-        # Combine channels
-        if self._comboOpt == RefCombo.Average:
-          self.trigData =  np.mean(data[refIndices, :], axis=0)
-        elif self._comboOpt == RefCombo.Maximum:
-          self.trigData = np.max(data[refIndices, :], axis=0)
+        peaks, properties = find_peaks(self.trigData, 1, distance=1)    # changed values for testing
+        chunk = len(peaks) >= 1       # our data has only one peak, so consider it
+        # print(f"Found {len(peaks)} peaks") # TEMPORARILY DISABLE FOR TESTING
 
-        # Detrend before peak detection
-        self.trigData -= np.mean(self.trigData)
-
-        peaks, properties = find_peaks(self.trigData, 200, width=(None, 20), threshold=20, distance=20)
-        print(f"Found {len(peaks)} peaks")
-        chunk = len(peaks) > 1
-
-        # Plot detection output
-        pltItem = self.autoParam.fig.value()
-        pltItem.clear()
-        for peak in peaks:
-          pltItem.addLine(x=self.detectX[peak], pen={'color': "#d94350", 'width': 3})
-        pltItem.plot(x=self.detectX, y=self.trigData)
-        self.autoParam.fig.setValue(pltItem)
-
-    # Apply AUC extraction regardless of detection logic
-    for i, ch in enumerate(self.chTable.values()):
-      # ch.chunkData(data[i], peaks)  # if this is commented out for a reason, leave it
-      aocs.append(ch.auc)
-
+        #chunk based off artifact
+        for i, ch in enumerate(self.chTable.values()):
+          #ch.chunkData(data[i], peaks) #chunks and computes
+          aocs.append(ch.auc)
       
       # ── 4) Decide between chunked vs continuous processing ──────────────────
       #compute and chunk data
