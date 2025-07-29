@@ -948,8 +948,9 @@ class CCEPFilter(GridFilter):
       for i, ch in enumerate(self.chTable.values()):
           ch.computeData(data[i], avgPlots)
           # ch.chunkData(data[i], peaks, avgPlots)
-          last_peak_idx = peaks[-1]
-          ch.last_peak_time = last_peak_idx / self.sr * 1000 # in ms
+          if peaks:
+            last_peak_idx = peaks[-1]
+            ch.last_peak_time = last_peak_idx / self.sr * 1000 # in ms
           ch.computeFeatures()
 
           # build per-chunk metadata
