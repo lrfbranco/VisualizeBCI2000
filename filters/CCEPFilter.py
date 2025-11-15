@@ -542,24 +542,64 @@ class CCEPFilter(GridFilter):
     triggersFound = np.count_nonzero(state[SharedStates.CCEPTriggered])
     self.numTrigs += triggersFound
 
-    #find stim ch if possible
+    # -- Grab each relevant parameter and pass it along --
     if np.shape(state)[0] > 1 and triggersFound:
-      stimCh = state[SharedStates.StimulatingChannel].nonzero()[0]
-      if stimCh.any():
-        #just get first non-zero value
-        chBits = state[SharedStates.StimulatingChannel][stimCh[0]]
-        testStimChs = []
-        chBinary = '{0:08b}'.format(chBits)
-        for b in range(len(chBinary)): #32 bit state
-          if chBinary[len(chBinary) - b - 1] == '1':
-            #print(self.chNames[b] + " at " + str(b))
-            testStimChs.append(self.chNames[b]) #append ch name
-        #minimally change used array
-        if testStimChs != self.stimChs:
-          self.stimChs = testStimChs
+      # Stim channels (needs decoding 32bit variable)
+      StimulatingChannel = state[SharedStates.StimulatingChannel] # Defined from bci2000
+      if StimulatingChannel.nonzero()[0].any():
+        first_nonzero_ix = SenStimChannel.nonzero()[0][0]
+        self.bciStimChan = self.extract_32bit_state(StimulatingChannel[first_nonzero_ix])
+
+      SenStimChannel = state[SharedStates.SenStimChannel]
+      if SenStimChannel.nonzero()[0].any():
+        first_nonzero_ix = SenStimChannel.nonzero()[0][0]
+        self.senStimChannel = self.extract_32bit_state(SenStimChannel[first_nonzero_ix])
+
+      SenStimChansAnode = state[SharedStates.SenStimChansAnode]
+      if SenStimChansAnode.nonzero()[0].any():
+        first_nonzero_ix = SenStimChansAnode.nonzero()[0][0]
+        self.senStimChansAnode = self.extract_32bit_state(SenStimChansAnode[first_nonzero_ix])
+        
+      SenStimChansCathode = state[SharedStates.SenStimChansCathode]
+      if SenStimChansCathode.nonzero()[0].any():
+        first_nonzero_ix = SenStimChansCathode.nonzero()[0][0]
+        self.senStimChansCathode = self.extract_32bit_state(SenStimChansCathode[first_nonzero_ix])
       
-      self.stimFreq = np.median(state[SharedStates.SenStimFreq])
-      print(str(self.stimFreq) + " Hz found")
+      # Frequency
+      try:
+        first_nonzero_ix = state[SharedStates.SenStimFreq].nonzero()[0][0]
+        self.stimFreq = np.median(state[SharedStates.SenStimFreq][first_nonzero_ix])
+        print(f"{self.stimFreq} Hz found")
+      except Exception as e:
+        print(f"Failed to read stimFreq. Make sure your 'ShareCCEPFilterStates' has all the necessary states defined in BCI2000 batch file. Error:\n {e}")
+        self.stimFreq = None
+      # Amplitude
+      try:
+        int_part = float(np.median(state[SharedStates.SenStimAmpli][state[SharedStates.SenStimAmpli].nonzero()[0][0]]))
+        dec_part = float(np.median(state[SharedStates.SenStimAmpli_dec][state[SharedStates.SenStimAmpli_dec].nonzero()[0][0]]))
+        self.stimAmpl = int_part + dec_part / 100.0
+        print(f"{self.stimAmpl} mA found")
+      except Exception as e:
+        print(f"Failed to read stimAmpl. Make sure your 'ShareCCEPFilterStates' has all the necessary states defined in BCI2000 batch file. Error:\n {e}")
+        self.stimAmpl = None
+
+  def extract_32bit_state(self, stateBits):
+    stimChNames = []
+    stimChBinary = f"{stateBits:032b}"
+    # convert each bit to int, LSB → MSB
+    stimChArray = [int(bit) for bit in stimChBinary[::-1]]
+
+    # build names from bits that are ON
+    for b, bit in enumerate(stimChArray[::-1]):
+        if bit == 1:
+            try:
+                stimChNames.append(self.chNames[b])
+            except Exception as e:
+                print(f"Failed to find channel name: {e}")
+                stimChNames.append('ERR')
+
+    return stimChNames, stimChBinary, stimChArray
+      
 
   def update_summary_table(self):
     # grab filters
@@ -937,24 +977,33 @@ class CCEPFilter(GridFilter):
         # Generate metadata ONCE per stimulation event
       self.epoch_count += 1
       self.epochDisplay.setValue(self.epoch_count)
-      fake_meta = {
-          'frequency': np.random.choice(list(Frequency)),
-          'amplitude': np.random.choice(list(Amplitude)).value,
-          'stim_channel': np.random.choice(list(StimChannel)),
-          'trial_id': self.epoch_count
+      #fake_meta = {
+      #    'frequency': np.random.choice(list(Frequency)),
+      #    'amplitude': np.random.choice(list(Amplitude)).value,
+      #    'stim_channel': np.random.choice(list(StimChannel)),
+      #    'trial_id': self.epoch_count
+      #}
+      this_meta = {
+         'frequency': self.stimFreq,
+         'amplitude': self.stimAmpl,
+         'stim_channel': self.senStimChansAnode[1],
+         'trial_id': self.epoch_count
       }
 
       # process all channels
       for i, ch in enumerate(self.chTable.values()):
           ch.computeData(data[i], avgPlots)
           # ch.chunkData(data[i], peaks, avgPlots)
-          if peaks:
+          if peaks.size > 1:
             last_peak_idx = peaks[-1]
             ch.last_peak_time = last_peak_idx / self.sr * 1000 # in ms
+          else: # no peaks were detected here
+            ch.last_peak_time = 0 
+            
           ch.computeFeatures()
 
           # build per-chunk metadata
-          meta = fake_meta.copy()
+          meta = this_meta.copy()
           meta['channel'] = ch.title if hasattr(ch, 'title') else self.chNames[i]
           meta['rms']     = ch.rms
           meta['p2p']     = ch.p2p
