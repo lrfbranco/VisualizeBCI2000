@@ -490,7 +490,7 @@ class CCEPFilter(GridFilter):
         f"Epoch {idx} parameters ➔ "
         f"Frequency: {meta['frequency']} Hz | "
         f"Amplitude: {meta['amplitude']} mA | "
-        f"Stim Channel: {meta['stim_channel']}"
+        f"Stim Channel: {meta['stim_channels']}"
     )
 
     self._show_epoch(idx, epoch_chunks)
@@ -590,7 +590,7 @@ class CCEPFilter(GridFilter):
     stimChArray = [int(bit) for bit in stimChBinary[::-1]]
 
     # build names from bits that are ON
-    for b, bit in enumerate(stimChArray[::-1]):
+    for b, bit in enumerate(stimChArray):
         if bit == 1:
             try:
                 stimChNames.append(self.chNames[b])
@@ -676,13 +676,13 @@ class CCEPFilter(GridFilter):
     # stim-channel summaries
     _populate(
         self.stimLeftTable,
-        sorted(_group_by(left,  'stim_channel').keys()),
-        _group_by(left,  'stim_channel')
+        sorted(_group_by(left,  'stim_channels').keys()),
+        _group_by(left,  'stim_channels')
     )
     _populate(
         self.stimRightTable,
-        sorted(_group_by(right, 'stim_channel').keys()),
-        _group_by(right, 'stim_channel')
+        sorted(_group_by(right, 'stim_channels').keys()),
+        _group_by(right, 'stim_channels')
     )
 
   def compute_metrics(self, group):
@@ -980,13 +980,19 @@ class CCEPFilter(GridFilter):
       #fake_meta = {
       #    'frequency': np.random.choice(list(Frequency)),
       #    'amplitude': np.random.choice(list(Amplitude)).value,
-      #    'stim_channel': np.random.choice(list(StimChannel)),
+      #    'stim_channels': np.random.choice(list(StimChannel)),
       #    'trial_id': self.epoch_count
       #}
+      
+      # Grab stim chans and concat
+      s = self.senStimChansAnode[0]
+      s = ";".join(sorted(s, key=lambda x: int(x[2:]))) # Assumes all channels are named (ChXX)
       this_meta = {
          'frequency': self.stimFreq,
          'amplitude': self.stimAmpl,
-         'stim_channel': self.senStimChansAnode[1],
+         'stim_channels': s,
+         'stim_channels_arr': self.senStimChansAnode[2],
+         'stim_channels_int': int(self.senStimChansAnode[1],2),
          'trial_id': self.epoch_count
       }
 
@@ -1017,7 +1023,7 @@ class CCEPFilter(GridFilter):
           meta = next(c for c in all_chunks if c['trial_id']==tid)
           f   = int(meta['frequency'])
           a   = float(meta['amplitude']) 
-          s   = int(meta['stim_channel'])
+          s   = int(meta['stim_channels_int'])
           labels.append(f"{tid} ({f} Hz, {a:.1f} mA, {s})")
 
       self.epochParam.setLimits(labels)
@@ -1300,7 +1306,7 @@ class CCEPFilter(GridFilter):
       if amp != 'All':
           query['amplitude'] = amp
       if stim != 'All':
-          query['stim_channel'] = stim
+          query['stim_channels'] = stim
       
       #self.logPrint(f"\nFilter query → {query}")
 
@@ -1340,7 +1346,7 @@ class CCEPFilter(GridFilter):
             amp_counts[a] = len(set(entry['trial_id'] for entry in results))
 
     for ch in StimChannel:
-        results = get_partial({'stim_channel': ch})
+        results = get_partial({'stim_channels': ch})
         if results:
             stim_counts[ch] = len(set(entry['trial_id'] for entry in results))
 

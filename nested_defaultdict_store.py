@@ -6,7 +6,7 @@ import numpy as np
 
 # define nested defaultdict tree: 
 # amplitude -> frequency -> stim_channel -> list of data entries (example hierarchy)
-metadata_keys = ['frequency', 'amplitude', 'stim_channel']
+metadata_keys = ['frequency', 'amplitude', 'stim_channels']
 
 # define innermost level (list of data entries)
 # recursive definition allows for infinite defaultdicts, any missing key automatically creates another defaultdict of the same type
@@ -24,7 +24,7 @@ def to_py_type(x):
 def add_chunk(data, meta):
     f = to_py_type(meta.get('frequency'))
     a = to_py_type(meta.get('amplitude'))
-    s = to_py_type(meta.get('stim_channel'))
+    s = to_py_type(meta.get('stim_channels'))
 
     # ensure nested dicts exist
     root.setdefault(f, {})\
@@ -39,7 +39,7 @@ def add_chunk(data, meta):
         'trial_id':    meta.get('trial_id'),
         'frequency':   f,
         'amplitude':   a,
-        'stim_channel': s,
+        'stim_channels': s,
         'channel':     meta.get('channel'),
         'rms':         meta.get('rms',   np.nan),
         'p2p':         meta.get('p2p',   np.nan),
@@ -91,10 +91,10 @@ def get_partial(meta_query, node=None, level=0):
 # == TESTING ==
 if __name__ == "__main__":
     dummy_data = np.random.randn(1500, 16)       # initialize 1500 samples, 16 channels timeseries data w/ random values
-    dummy_meta = {'amplitude': 1.0, 'frequency': 130, 'stim_channel': 5, 'timestamp': 123456, 'trial_id': 1}
+    dummy_meta = {'amplitude': 1.0, 'frequency': 130, 'stim_channels': 5, 'timestamp': 123456, 'trial_id': 1}
     add_chunk(dummy_data, dummy_meta)
 
-    query_meta = {'amplitude': 1.0, 'frequency': 130, 'stim_channel': 5}
+    query_meta = {'amplitude': 1.0, 'frequency': 130, 'stim_channels': 5}
     results = get_group(query_meta)
     #print(results)
 
@@ -104,7 +104,7 @@ if __name__ == "__main__":
     print("Found", len(results), "match(es) to query")
     print(results)
 
-    query_2 = {'stim_channel': 5}
+    query_2 = {'stim_channels': 5}
     results_2 = get_partial(query_2)
     print("Found", len(results_2), "match(es) to query")
 
